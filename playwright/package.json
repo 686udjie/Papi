@@ -1,0 +1,11 @@
+{
+  "name": "papi-playwright",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "capture": "node CaptureHomefeed.js"
+  },
+  "dependencies": {
+    "playwright": "^1.44.0"
+  }
+}

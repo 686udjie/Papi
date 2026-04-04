@@ -1,33 +1,89 @@
-# Pinterest API
+# Papi
+Pinterest API
 
-## Run
+# Installation
 
-```bash
+```sh
 git clone https://github.com/686udjie/Papi.git
 cd Papi
 go run .
 ```
 
-Server starts on `:8080`.
+# Usage
+```pwsh
+Pinterest API server
 
-## Use
+Usage:
+  go run .
 
-Request by pin URL:
-
-```bash
-curl "http://localhost:8080/api/pin?url=https://www.pinterest.com/pin/593701163419317900/" | jq
+Endpoints:
+  GET /api/pin
+  GET /api/homefeed (auth required)
 ```
 
-Or by pin ID:
+# Commands
+## `GET /api/pin?id=<PIN_ID>`
+```sh
+Fetch Pinterest metadata by pin ID.
 
-```bash
-curl "http://localhost:8080/api/pin?id=593701163419317900" | jq
+Example:
+  curl "http://localhost:8080/api/pin?id=593701163419317900" | jq
 ```
 
-## Response
+## `GET /api/pin?url=<PIN_URL>`
+```sh
+Fetch Pinterest metadata by pin URL.
 
-Successful response:
+Example:
+  curl "http://localhost:8080/api/pin?url=https://www.pinterest.com/pin/593701163419317900/" | jq
+```
 
+## `GET /api/homefeed`
+```sh
+Fetch the authenticated homefeed. Updates the bookmark cursor in the DB.
+
+Environment:
+  DATABASE_URL=postgres://user:pass@host:5432/dbname
+  PINTEREST_AUTH_CONFIRMED=true
+
+Example:
+  curl "http://localhost:8080/api/homefeed" | jq
+```
+
+## `go run -tags=playwright .`
+```sh
+Starts the server and opens Playwright once to capture a session (if needed).
+Skips capture on subsequent runs if a valid session exists.
+```
+
+# Homefeed Setup
+## Schema
+```sql
+CREATE TABLE IF NOT EXISTS sessions (
+  id TEXT PRIMARY KEY,
+  cookies_json TEXT NOT NULL,
+  cookies_header TEXT NOT NULL,
+  headers_json TEXT,
+  user_agent TEXT,
+  data_json TEXT,
+  source_url TEXT,
+  bookmark TEXT NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL,
+  expires_at TIMESTAMPTZ
+);
+```
+
+## Playwright Capture (standalone)
+```sh
+cd playwright
+npm install
+npx playwright install
+npm run capture
+```
+The capture prints JSON with `cookies`, `cookies_header`, `bookmark`, and request headers. Insert those into the `sessions` table if not using the Playwright build tag.
+
+# Responses
+Successful response example:
 ```json
 {
   "id": "593701163419317900",
@@ -39,13 +95,9 @@ Successful response:
   "creator": "reaper"
 }
 ```
-
 `type` is one of: `image`, `video`, or `gif`.
 
-## Errors
-
 Errors return JSON with HTTP status:
-
 ```json
 {
   "error": "missing id or url"
