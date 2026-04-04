@@ -5,12 +5,14 @@ import (
 	"database/sql"
 	"errors"
 	"os"
+	"strings"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 const DefaultSessionID = "default"
+const DefaultDatabaseURL = "postgres://localhost:5432/papi"
 
 var (
 	ErrSessionNotFound    = errors.New("session not found")
@@ -43,7 +45,11 @@ type PostgresStore struct {
 func NewPostgresStoreFromEnv() (SessionStore, error) {
 	databaseURL := os.Getenv("DATABASE_URL")
 	if databaseURL == "" {
-		return nil, ErrMissingDatabaseURL
+		_ = loadDotEnvFile(".env")
+		databaseURL = os.Getenv("DATABASE_URL")
+		if databaseURL == "" {
+			databaseURL = DefaultDatabaseURL
+		}
 	}
 	return NewPostgresStore(databaseURL)
 }
@@ -59,6 +65,39 @@ func NewPostgresStore(databaseURL string) (SessionStore, error) {
 		return nil, err
 	}
 	return store, nil
+}
+
+func loadDotEnvFile(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(strings.TrimSuffix(line, "\r"))
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		if key == "" {
+			continue
+		}
+		if _, exists := os.LookupEnv(key); exists {
+			continue
+		}
+		val := strings.TrimSpace(parts[1])
+		if len(val) >= 2 {
+			if (val[0] == '"' && val[len(val)-1] == '"') || (val[0] == '\'' && val[len(val)-1] == '\'') {
+				val = val[1 : len(val)-1]
+			}
+		}
+		_ = os.Setenv(key, val)
+	}
+	return nil
 }
 
 func (p *PostgresStore) GetSession(ctx context.Context, id string) (*Session, error) {

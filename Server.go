@@ -30,6 +30,7 @@ func buildApp() *handlers.App {
 
 func registerRoutes(app *handlers.App) {
 	http.HandleFunc("/api/pin", app.Pin)
+	http.HandleFunc("/api/login", app.Login)
 	http.HandleFunc("/api/homefeed", app.Homefeed)
 }
 

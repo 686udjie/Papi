@@ -18,6 +18,7 @@ Usage:
 
 Endpoints:
   GET /api/pin
+  POST /api/login (auth required)
   GET /api/homefeed (auth required)
 ```
 
@@ -50,10 +51,18 @@ Example:
   curl "http://localhost:8080/api/homefeed" | jq
 ```
 
-## `go run -tags=playwright .`
+## `POST /api/login`
 ```sh
-Starts the server and opens Playwright once to capture a session (if needed).
-Skips capture on subsequent runs if a valid session exists.
+Authenticate and store a session using a static HTTP login flow.
+
+Environment:
+  DATABASE_URL=postgres://user:pass@host:5432/dbname
+  PINTEREST_AUTH_CONFIRMED=true
+
+Example:
+  curl -X POST "http://localhost:8080/api/login" \
+    -H "Content-Type: application/json" \
+    -d '{"email":"you@example.com","password":"your_password"}' | jq
 ```
 
 # Homefeed Setup
@@ -73,14 +82,8 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 ```
 
-## Playwright Capture (standalone)
-```sh
-cd playwright
-npm install
-npx playwright install
-npm run capture
-```
-The capture prints JSON with `cookies`, `cookies_header`, `bookmark`, and request headers. Insert those into the `sessions` table if not using the Playwright build tag.
+# Session Setup
+Use `POST /api/login` to create or overwrite the session row in the `sessions` table.
 
 # Responses
 Successful response example:

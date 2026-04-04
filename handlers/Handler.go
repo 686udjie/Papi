@@ -17,6 +17,16 @@ type App struct {
 	Debug         bool
 }
 
+type loginRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
+type loginResponse struct {
+	Status   string `json:"status"`
+	Bookmark string `json:"bookmark,omitempty"`
+}
+
 func (a *App) Pin(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 
@@ -34,6 +44,69 @@ func (a *App) Pin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, result)
+}
+
+func (a *App) Login(w http.ResponseWriter, r *http.Request) {
+	if !a.AuthConfirmed {
+		writeJSON(w, http.StatusForbidden, map[string]string{
+			"error": "authorization not confirmed; set PINTEREST_AUTH_CONFIRMED=true to enable",
+		})
+		return
+	}
+
+	if a.Store == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": "session store not configured; set DATABASE_URL",
+		})
+		return
+	}
+
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{
+			"error": "method not allowed",
+		})
+		return
+	}
+
+	var payload loginRequest
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+		return
+	}
+	if payload.Email == "" || payload.Password == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "email and password are required"})
+		return
+	}
+
+	ctx := r.Context()
+	result, err := services.LoginAndCaptureSession(ctx, payload.Email, payload.Password, a.Store)
+	if err != nil {
+		switch {
+		case errors.Is(err, services.ErrInvalidInput):
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		case errors.Is(err, services.ErrInvalidCredentials):
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+			return
+		case errors.Is(err, services.ErrChallenge):
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": err.Error()})
+			return
+		case errors.Is(err, services.ErrUpstream):
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+			return
+		case errors.Is(err, services.ErrNetwork):
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		default:
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+
+	writeJSON(w, http.StatusOK, loginResponse{
+		Status:   "ok",
+		Bookmark: result.Bookmark,
+	})
 }
 
 func (a *App) Homefeed(w http.ResponseWriter, r *http.Request) {
@@ -67,13 +140,6 @@ func (a *App) Homefeed(w http.ResponseWriter, r *http.Request) {
 	if session.ExpiresAt.Valid && time.Now().After(session.ExpiresAt.Time) {
 		writeJSON(w, http.StatusConflict, map[string]string{
 			"error": "session expired; run capture",
-		})
-		return
-	}
-
-	if session.Bookmark == "" {
-		writeJSON(w, http.StatusConflict, map[string]string{
-			"error": "bookmark missing; run capture",
 		})
 		return
 	}
