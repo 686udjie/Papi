@@ -45,7 +45,7 @@ Fetch the authenticated homefeed. Updates the bookmark cursor in the DB.
 
 Environment:
   DATABASE_URL=postgres://user:pass@host:5432/dbname
-  PINTEREST_AUTH_CONFIRMED=true
+  PINTEREST_AUTH_CONFIRMED=true (auto-enabled when running via `go run .`)
 
 Example:
   curl "http://localhost:8080/api/homefeed" | jq
@@ -57,7 +57,7 @@ Authenticate and store a session using a static HTTP login flow.
 
 Environment:
   DATABASE_URL=postgres://user:pass@host:5432/dbname
-  PINTEREST_AUTH_CONFIRMED=true
+  PINTEREST_AUTH_CONFIRMED=true (auto-enabled when running via `go run .`)
 
 Example:
   curl -X POST "http://localhost:8080/api/login" \
