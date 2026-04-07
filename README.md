@@ -9,21 +9,54 @@ cd Papi
 go run .
 ```
 
-# Usage
-```pwsh
-Pinterest API server
+# Setup
+## Common Environment
+These variables are shared by the authenticated endpoints.
 
-Usage:
-  go run .
-
-Endpoints:
-  GET /api/pin
-  POST /api/login
-  GET /api/homefeed (auth required)
-  GET /api/search (auth required)
+```env
+DATABASE_URL=postgres://user:pass@host:5432/dbname
+PINTEREST_AUTH_CONFIRMED=true
+PINTEREST_EMAIL=you@example.com
+PINTEREST_PASSWORD=your_password
 ```
 
-# Commands
+Notes:
+- `POST /api/login` needs `DATABASE_URL`
+- `GET /api/homefeed`, `GET /api/search`, and `GET /api/board` use the full authenticated setup above
+- `PINTEREST_AUTH_CONFIRMED` is auto-enabled when running via `go run .`
+- if `PINTEREST_EMAIL` and `PINTEREST_PASSWORD` are set, authenticated endpoints can auto-refresh the stored session without manually calling `/api/login`
+
+## Session Schema
+```sql
+CREATE TABLE IF NOT EXISTS sessions (
+  id TEXT PRIMARY KEY,
+  cookies_json TEXT NOT NULL,
+  cookies_header TEXT NOT NULL,
+  headers_json TEXT,
+  user_agent TEXT,
+  data_json TEXT,
+  source_url TEXT,
+  bookmark TEXT NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL,
+  expires_at TIMESTAMPTZ
+);
+```
+
+## Run
+```sh
+go run .
+```
+
+# Endpoints
+```text
+GET /api/pin
+POST /api/login
+GET /api/homefeed
+GET /api/search
+GET /api/board
+```
+
+# Usage
 ## `GET /api/pin?id=<PIN_ID>`
 ```sh
 Fetch Pinterest metadata by pin ID.
@@ -44,12 +77,6 @@ Example:
 ```sh
 Fetch the authenticated homefeed. Updates the bookmark cursor in the DB.
 
-Environment:
-  DATABASE_URL=postgres://user:pass@host:5432/dbname
-  PINTEREST_AUTH_CONFIRMED=true (auto-enabled when running via `go run .`)
-  PINTEREST_EMAIL=you@example.com
-  PINTEREST_PASSWORD=your_password
-
 Example:
   curl "http://localhost:8080/api/homefeed" | jq
 ```
@@ -57,10 +84,6 @@ Example:
 ## `POST /api/login`
 ```sh
 Authenticate and store a session using a static HTTP login flow.
-
-Environment:
-  DATABASE_URL=postgres://user:pass@host:5432/dbname
-  PINTEREST_AUTH_CONFIRMED=true (auto-enabled when running via `go run .`)
 
 Example:
   curl -X POST "http://localhost:8080/api/login" \
@@ -72,33 +95,16 @@ Example:
 ```sh
 Fetch extracted pin objects from a Pinterest search results page.
 
-Environment:
-  DATABASE_URL=postgres://user:pass@host:5432/dbname
-  PINTEREST_AUTH_CONFIRMED=true
-  PINTEREST_EMAIL=you@example.com
-  PINTEREST_PASSWORD=your_password
-
 Example:
   curl "http://localhost:8080/api/search?q=hello&rs=typed" | jq
 ```
 
-If `PINTEREST_EMAIL` and `PINTEREST_PASSWORD` are set, `/api/homefeed` and `/api/search` will automatically create or refresh the stored session when needed, so the user does not have to call `/api/login` manually.
+## `GET /api/board?url=<BOARD_URL>`
+```sh
+Fetch a board and all of its child sections, including extracted pins for each section.
 
-# Homefeed Setup
-## Schema
-```sql
-CREATE TABLE IF NOT EXISTS sessions (
-  id TEXT PRIMARY KEY,
-  cookies_json TEXT NOT NULL,
-  cookies_header TEXT NOT NULL,
-  headers_json TEXT,
-  user_agent TEXT,
-  data_json TEXT,
-  source_url TEXT,
-  bookmark TEXT NOT NULL,
-  updated_at TIMESTAMPTZ NOT NULL,
-  expires_at TIMESTAMPTZ
-);
+Example:
+  curl "http://localhost:8080/api/board?url=https://www.pinterest.com/Skatbad07/inspo/" | jq
 ```
 
 # Session Setup

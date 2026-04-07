@@ -103,25 +103,14 @@ func (a *App) Login(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) Homefeed(w http.ResponseWriter, r *http.Request) {
-	if !a.requireAuthorizedSessionSupport(w) {
-		return
-	}
-
-	ctx := r.Context()
-	session, err := a.ensurePinterestSession(ctx)
+	session, err := a.requireSession(w, r)
 	if err != nil {
-		writeSessionError(w, err)
 		return
-	}
-
-	client := a.Client
-	if client == nil {
-		client = &http.Client{Timeout: 15 * time.Second}
 	}
 
 	body, nextBookmark, status, err := services.FetchHomefeed(
-		ctx,
-		client,
+		r.Context(),
+		a.httpClient(),
 		session.CookiesHeader,
 		session.Bookmark,
 		session.HeadersJSON,
@@ -148,7 +137,7 @@ func (a *App) Homefeed(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if nextBookmark != "" && nextBookmark != session.Bookmark {
-		_ = a.Store.UpdateBookmark(ctx, storage.DefaultSessionID, nextBookmark)
+		_ = a.Store.UpdateBookmark(r.Context(), storage.DefaultSessionID, nextBookmark)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -173,24 +162,56 @@ func (a *App) Search(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(pinsJSON)
 }
 
+func (a *App) Board(w http.ResponseWriter, r *http.Request) {
+	rawURL := strings.TrimSpace(r.URL.Query().Get("url"))
+	if rawURL == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing url"})
+		return
+	}
+
+	session, err := a.requireSession(w, r)
+	if err != nil {
+		return
+	}
+
+	result, status, err := services.FetchBoard(
+		r.Context(),
+		a.httpClient(),
+		session.CookiesHeader,
+		session.HeadersJSON,
+		session.UserAgent,
+		rawURL,
+	)
+	if err != nil {
+		switch {
+		case errors.Is(err, services.ErrMissingBoardURL), errors.Is(err, services.ErrInvalidBoardURL):
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		default:
+			if status >= 200 && status < 300 {
+				writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+				return
+			}
+			_ = a.handleUpstreamStatus(w, nil, status)
+			return
+		}
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
 func (a *App) fetchSearchResponse(w http.ResponseWriter, r *http.Request) ([]byte, error) {
 	query, rs, ok := parseSearchRequest(w, r)
 	if !ok {
 		return nil, errors.New("invalid search request")
 	}
-	if !a.requireAuthorizedSessionSupport(w) {
-		return nil, errors.New("search unavailable")
-	}
-
-	ctx := r.Context()
-	session, err := a.ensurePinterestSession(ctx)
+	session, err := a.requireSession(w, r)
 	if err != nil {
-		writeSessionError(w, err)
 		return nil, err
 	}
 
 	body, status, err := services.FetchSearchPage(
-		ctx,
+		r.Context(),
 		a.httpClient(),
 		session.CookiesHeader,
 		session.HeadersJSON,
@@ -220,6 +241,18 @@ func parseSearchRequest(w http.ResponseWriter, r *http.Request) (string, string,
 		rs = "typed"
 	}
 	return query, rs, true
+}
+
+func (a *App) requireSession(w http.ResponseWriter, r *http.Request) (*storage.Session, error) {
+	if !a.requireAuthorizedSessionSupport(w) {
+		return nil, errors.New("session unavailable")
+	}
+	session, err := a.ensurePinterestSession(r.Context())
+	if err != nil {
+		writeSessionError(w, err)
+		return nil, err
+	}
+	return session, nil
 }
 
 func (a *App) requireStore(w http.ResponseWriter) bool {
