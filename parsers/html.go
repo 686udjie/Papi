@@ -158,6 +158,48 @@ func extractJSONLDScripts(html string) []string {
 	return scripts
 }
 
+func extractApplicationJSONScripts(html string) []string {
+	lower := strings.ToLower(html)
+	var scripts []string
+	pos := 0
+	for {
+		idx := strings.Index(lower[pos:], `type="application/json"`)
+		if idx == -1 {
+			idx = strings.Index(lower[pos:], `type='application/json'`)
+		}
+		if idx == -1 {
+			break
+		}
+		idx += pos
+
+		start := strings.LastIndex(lower[:idx], "<script")
+		if start == -1 {
+			pos = idx + 1
+			continue
+		}
+		startTagEnd := strings.Index(lower[start:], ">")
+		if startTagEnd == -1 {
+			pos = idx + 1
+			continue
+		}
+		startTagEnd += start
+
+		end := strings.Index(lower[startTagEnd:], "</script>")
+		if end == -1 {
+			pos = idx + 1
+			continue
+		}
+		end += startTagEnd
+
+		content := strings.TrimSpace(html[startTagEnd+1 : end])
+		if content != "" {
+			scripts = append(scripts, content)
+		}
+		pos = end + len("</script>")
+	}
+	return scripts
+}
+
 func extractRelayJSONObjects(html string) []map[string]any {
 	const marker = "window.__PWS_RELAY_REGISTER_COMPLETED_REQUEST__"
 	var results []map[string]any

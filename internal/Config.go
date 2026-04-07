@@ -9,6 +9,9 @@ func AuthConfirmedFromEnv() bool {
 	if value, ok := os.LookupEnv("PINTEREST_AUTH_CONFIRMED"); ok {
 		return isTruthy(value)
 	}
+	if HasPinterestCredentials() {
+		return true
+	}
 	// Convenience: auto-confirm when running via `go run .` in local dev.
 	if isGoRunExecutable() {
 		return true
@@ -19,6 +22,10 @@ func AuthConfirmedFromEnv() bool {
 func DebugEnabledFromEnv() bool {
 	value := os.Getenv("PINTEREST_DEBUG")
 	return isTruthy(value)
+}
+
+func HasPinterestCredentials() bool {
+	return strings.TrimSpace(os.Getenv("PINTEREST_EMAIL")) != "" && strings.TrimSpace(os.Getenv("PINTEREST_PASSWORD")) != ""
 }
 
 func isTruthy(value string) bool {

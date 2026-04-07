@@ -18,8 +18,9 @@ Usage:
 
 Endpoints:
   GET /api/pin
-  POST /api/login (auth required)
+  POST /api/login
   GET /api/homefeed (auth required)
+  GET /api/search (auth required)
 ```
 
 # Commands
@@ -46,6 +47,8 @@ Fetch the authenticated homefeed. Updates the bookmark cursor in the DB.
 Environment:
   DATABASE_URL=postgres://user:pass@host:5432/dbname
   PINTEREST_AUTH_CONFIRMED=true (auto-enabled when running via `go run .`)
+  PINTEREST_EMAIL=you@example.com
+  PINTEREST_PASSWORD=your_password
 
 Example:
   curl "http://localhost:8080/api/homefeed" | jq
@@ -64,6 +67,22 @@ Example:
     -H "Content-Type: application/json" \
     -d '{"email":"you@example.com","password":"your_password"}' | jq
 ```
+
+## `GET /api/search?q=<QUERY>&rs=<SOURCE>`
+```sh
+Fetch extracted pin objects from a Pinterest search results page.
+
+Environment:
+  DATABASE_URL=postgres://user:pass@host:5432/dbname
+  PINTEREST_AUTH_CONFIRMED=true
+  PINTEREST_EMAIL=you@example.com
+  PINTEREST_PASSWORD=your_password
+
+Example:
+  curl "http://localhost:8080/api/search?q=hello&rs=typed" | jq
+```
+
+If `PINTEREST_EMAIL` and `PINTEREST_PASSWORD` are set, `/api/homefeed` and `/api/search` will automatically create or refresh the stored session when needed, so the user does not have to call `/api/login` manually.
 
 # Homefeed Setup
 ## Schema
