@@ -18,6 +18,16 @@ func ExtractJSON(html string) (string, error) {
 	return strings.TrimSpace(match[1]), nil
 }
 
+func ExtractResourceJSON(html string, resourceName string) (string, error) {
+	scripts := extractApplicationJSONScripts(html)
+	for _, script := range scripts {
+		if strings.Contains(script, `"name":"`+resourceName+`"`) {
+			return script, nil
+		}
+	}
+	return "", ErrJSONNotFound
+}
+
 func ParsePinterestJSON(raw string, id string) (*Response, error) {
 	var data map[string]any
 	if err := json.Unmarshal([]byte(raw), &data); err != nil {

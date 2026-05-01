@@ -115,8 +115,10 @@ func FetchBoard(ctx context.Context, client *http.Client, cookiesHeader string, 
 		return nil, status, err
 	}
 
+	metadata, _ := parsers.ExtractBoardMetadataFromHTML(string(pageBody))
+
 	sections, err := discoverBoardSections(ctx, client, cookiesHeader, headersJSON, userAgent, ref.SourceURL, pageBody)
-	if err != nil {
+	if err != nil && !errors.Is(err, parsers.ErrBoardSectionsNotFound) {
 		return nil, status, err
 	}
 
@@ -125,6 +127,32 @@ func FetchBoard(ctx context.Context, client *http.Client, cookiesHeader string, 
 		Slug:     ref.Slug,
 		URL:      HomefeedBaseURL + ref.SourceURL,
 		Sections: make([]BoardSectionResult, 0, len(sections)),
+	}
+
+	if len(sections) == 0 && metadata != nil {
+		// No sections found, fetch from board feed
+		body, feedStatus, feedErr := FetchBoardFeedPins(
+			ctx,
+			client,
+			cookiesHeader,
+			headersJSON,
+			userAgent,
+			ref.SourceURL,
+			metadata.ID,
+		)
+		if feedErr == nil && feedStatus >= 200 && feedStatus < 300 {
+			pins, pinErr := parsers.ExtractSearchPinsFromJSON(string(body))
+			if pinErr == nil {
+				result.Sections = append(result.Sections, BoardSectionResult{
+					ID:    metadata.ID,
+					Slug:  "pins",
+					Title: "Pins",
+					URL:   result.URL,
+					Pins:  pins,
+					Count: len(pins),
+				})
+			}
+		}
 	}
 
 	for _, section := range sections {
@@ -315,6 +343,56 @@ func FetchBoardSectionPins(ctx context.Context, client *http.Client, cookiesHead
 	applyDefaultHeaders(req, sourceURL, userAgent, cookiesHeader)
 	req.Header.Set("X-Pinterest-PWS-Handler", defaultBoardPinsHandler)
 	req.Header.Set("X-Pinterest-AppState", defaultAppState)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, resp.StatusCode, err
+	}
+
+	return body, resp.StatusCode, nil
+}
+func FetchBoardFeedPins(ctx context.Context, client *http.Client, cookiesHeader string, headersJSON string, userAgent string, sourceURL string, boardID string) ([]byte, int, error) {
+	payload := map[string]any{
+		"options": map[string]any{
+			"board_id":             boardID,
+			"board_url":            sourceURL,
+			"currentFilter":        -1,
+			"field_set_key":        "react_grid_pin",
+			"filter_section_pins":  true,
+			"sort":                 "default",
+			"layout":               "featured_board",
+			"page_size":            25,
+			"redux_normalize_feed": true,
+		},
+		"context": map[string]any{},
+	}
+
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	params := url.Values{}
+	params.Set("source_url", sourceURL)
+	params.Set("data", string(raw))
+	params.Set("_", strconv.FormatInt(nowFunc().UnixMilli(), 10))
+
+	requestURL := HomefeedBaseURL + "/resource/BoardFeedResource/get/?" + params.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	applyCapturedHeaders(req, headersJSON)
+	applyDefaultHeaders(req, sourceURL, userAgent, cookiesHeader)
 
 	resp, err := client.Do(req)
 	if err != nil {

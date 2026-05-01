@@ -13,6 +13,38 @@ type BoardSection struct {
 	Slug  string `json:"slug"`
 	Title string `json:"title"`
 }
+ 
+type BoardMetadata struct {
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	URL          string `json:"url"`
+	Username     string `json:"username"`
+	Slug         string `json:"slug"`
+	SectionCount int    `json:"section_count"`
+}
+
+func ExtractBoardMetadataFromHTML(html string) (*BoardMetadata, error) {
+	raw, err := ExtractResourceJSON(html, "BoardResource")
+	if err != nil {
+		return nil, err
+	}
+
+	var wrapper struct {
+		ResourceResponse struct {
+			Data BoardMetadata `json:"data"`
+		} `json:"resource_response"`
+	}
+
+	if err := json.Unmarshal([]byte(raw), &wrapper); err != nil {
+		return nil, err
+	}
+
+	if wrapper.ResourceResponse.Data.ID == "" {
+		return nil, errors.New("board id not found in metadata")
+	}
+
+	return &wrapper.ResourceResponse.Data, nil
+}
 
 func ExtractBoardSectionsFromHTML(html string) ([]BoardSection, error) {
 	collector := &boardSectionCollector{
