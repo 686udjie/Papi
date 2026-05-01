@@ -21,6 +21,7 @@ type BoardMetadata struct {
 	Username     string `json:"username"`
 	Slug         string `json:"slug"`
 	SectionCount int    `json:"section_count"`
+	PinCount     int    `json:"pin_count"`
 }
 
 func ExtractBoardMetadataFromHTML(html string) (*BoardMetadata, error) {
@@ -76,6 +77,86 @@ func ExtractBoardSectionsFromJSON(raw string) ([]BoardSection, error) {
 		return nil, ErrBoardSectionsNotFound
 	}
 	return collector.sections, nil
+}
+
+func ExtractBoardsFromJSON(raw string) ([]BoardMetadata, error) {
+	collector := &boardCollector{
+		seen:   make(map[string]struct{}),
+		boards: make([]BoardMetadata, 0),
+	}
+	if err := collector.collectJSON(raw); err != nil {
+		return nil, err
+	}
+	return collector.boards, nil
+}
+
+type boardCollector struct {
+	boards []BoardMetadata
+	seen   map[string]struct{}
+}
+
+func (c *boardCollector) collectJSON(raw string) error {
+	if raw == "" {
+		return nil
+	}
+	var data any
+	if err := json.Unmarshal([]byte(raw), &data); err != nil {
+		return err
+	}
+	c.walk(data)
+	return nil
+}
+
+func (c *boardCollector) walk(value any) {
+	switch v := value.(type) {
+	case map[string]any:
+		if board, ok := parseBoardMetadata(v); ok {
+			c.add(board)
+		}
+		for _, item := range v {
+			c.walk(item)
+		}
+	case []any:
+		for _, item := range v {
+			c.walk(item)
+		}
+	}
+}
+
+func (c *boardCollector) add(board BoardMetadata) {
+	if board.ID == "" {
+		return
+	}
+	if _, exists := c.seen[board.ID]; exists {
+		return
+	}
+	c.seen[board.ID] = struct{}{}
+	c.boards = append(c.boards, board)
+}
+
+func parseBoardMetadata(obj map[string]any) (BoardMetadata, bool) {
+	id, _ := getString(obj["id"])
+	name, _ := getString(obj["name"])
+	url, _ := getString(obj["url"])
+	if id == "" || name == "" || url == "" {
+		return BoardMetadata{}, false
+	}
+
+	objType, _ := getString(obj["type"])
+	if objType != "board" && !strings.Contains(url, "/") {
+		return BoardMetadata{}, false
+	}
+
+	sectionCount, _ := getInt(obj["section_count"])
+	pinCount, _ := getInt(obj["pin_count"])
+
+	return BoardMetadata{
+		ID:           id,
+		Name:         name,
+		URL:          url,
+		SectionCount: sectionCount,
+		PinCount:     pinCount,
+	}, true
 }
 
 type boardSectionCollector struct {

@@ -49,6 +49,27 @@ func (a *App) Pin(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
+func (a *App) User(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
+	profileURL := query.Get("url")
+
+	// Optional session for better data (counts, etc)
+	var cookiesHeader string
+	client := a.httpClient()
+	session, _ := a.Store.GetSession(r.Context(), storage.DefaultSessionID)
+	if session != nil && !sessionExpired(session) {
+		cookiesHeader = session.CookiesHeader
+	}
+
+	result, err := services.FetchUser(r.Context(), client, cookiesHeader, profileURL)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
 func (a *App) Login(w http.ResponseWriter, r *http.Request) {
 	if !a.requireStore(w) {
 		return

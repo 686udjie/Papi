@@ -9,25 +9,10 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
-	"strings"
 	"time"
 )
 
-var HomefeedBaseURL = "https://www.pinterest.com"
 var nowFunc = time.Now
-
-const (
-	defaultAccept     = "application/json, text/javascript, */*, q=0.01"
-	defaultReferer    = "https://www.pinterest.com/"
-	defaultOrigin     = "https://www.pinterest.com"
-	defaultUserAgent  = "Mozilla/5.0"
-	defaultSourceURL  = "/"
-	defaultAcceptLang = "en-US,en;q=0.9"
-	defaultAppState   = "active"
-	defaultPWSHandler = "www/index.js"
-	defaultRetryDelay = 1 * time.Second
-	defaultMaxRetries = 1
-)
 
 type homefeedPayload struct {
 	Options struct {
@@ -131,7 +116,7 @@ func (r homefeedRequest) do() ([]byte, string, int, error) {
 		return nil, "", 0, err
 	}
 	applyCapturedHeaders(req, r.headersJSON)
-	applyDefaultHeaders(req, sourceURL, r.userAgent, r.cookiesHeader)
+	applyDefaultHeaders(req, sourceURL, r.userAgent, r.cookiesHeader, "")
 
 	resp, err := r.client.Do(req)
 	if err != nil {
@@ -155,52 +140,6 @@ func normalizeSourceURL(sourceURL string) string {
 		return defaultSourceURL
 	}
 	return sourceURL
-}
-
-func applyDefaultHeaders(req *http.Request, sourceURL string, userAgent string, cookiesHeader string) {
-	if req == nil {
-		return
-	}
-	setHeaderIfEmpty(req.Header, "Accept", defaultAccept)
-	setHeaderIfEmpty(req.Header, "Referer", defaultReferer)
-	setHeaderIfEmpty(req.Header, "Origin", defaultOrigin)
-	setHeaderIfEmpty(req.Header, "X-Requested-With", "XMLHttpRequest")
-	setHeaderIfEmpty(req.Header, "X-Pinterest-Source-URL", sourceURL)
-	setHeaderIfEmpty(req.Header, "X-Pinterest-Source-Url", sourceURL)
-	setHeaderIfEmpty(req.Header, "X-Pinterest-AppState", defaultAppState)
-	setHeaderIfEmpty(req.Header, "X-Pinterest-PWS-Handler", defaultPWSHandler)
-	setHeaderIfEmpty(req.Header, "Accept-Language", defaultAcceptLang)
-	if userAgent != "" {
-		req.Header.Set("User-Agent", userAgent)
-	} else {
-		setHeaderIfEmpty(req.Header, "User-Agent", defaultUserAgent)
-	}
-	if cookiesHeader != "" {
-		req.Header.Set("Cookie", cookiesHeader)
-	}
-	if token := extractCSRFFromCookies(cookiesHeader); token != "" {
-		req.Header.Set("X-CSRFToken", token)
-	}
-}
-
-func setHeaderIfEmpty(header http.Header, key string, value string) {
-	if header.Get(key) == "" && value != "" {
-		header.Set(key, value)
-	}
-}
-
-func sleepWithContext(ctx context.Context, delay time.Duration) error {
-	if delay <= 0 {
-		return nil
-	}
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
-	}
 }
 
 func buildHomefeedPayload(bookmark string, dataJSON string) (homefeedPayload, error) {
@@ -266,38 +205,4 @@ func ParseHomefeedBookmark(body []byte) (string, error) {
 		}
 	}
 	return "", errors.New("bookmark missing")
-}
-
-func extractCSRFFromCookies(cookiesHeader string) string {
-	if cookiesHeader == "" {
-		return ""
-	}
-	parts := strings.Split(cookiesHeader, ";")
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if strings.HasPrefix(part, "csrftoken=") {
-			return strings.TrimPrefix(part, "csrftoken=")
-		}
-	}
-	return ""
-}
-
-func applyCapturedHeaders(req *http.Request, headersJSON string) {
-	if headersJSON == "" || req == nil {
-		return
-	}
-	var headers map[string]string
-	if err := json.Unmarshal([]byte(headersJSON), &headers); err != nil {
-		return
-	}
-	for key, value := range headers {
-		if key == "" || value == "" {
-			continue
-		}
-		switch strings.ToLower(key) {
-		case "cookie", "host", "content-length", "connection":
-			continue
-		}
-		req.Header.Set(key, value)
-	}
 }

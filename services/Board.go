@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	neturl "net/url"
 	"strconv"
 	"strings"
 
@@ -50,24 +49,7 @@ type BoardRef struct {
 	SourceURL string
 }
 
-type boardSectionPinsPayload struct {
-	Options struct {
-		CurrentFilter     int    `json:"currentFilter"`
-		FieldSetKey       string `json:"field_set_key"`
-		IsOwnProfilePins  bool   `json:"is_own_profile_pins"`
-		PageSize          int    `json:"page_size"`
-		ReduxNormalizeFee bool   `json:"redux_normalize_feed"`
-		SectionID         string `json:"section_id"`
-		OrbacSubjectID    string `json:"orbac_subject_id"`
-	} `json:"options"`
-	Context map[string]any `json:"context"`
-}
-
-type boardParentPayload struct {
-	Options map[string]any `json:"options"`
-	Context map[string]any `json:"context"`
-}
-
+// ParseBoardRef extracts username and slug from a Pinterest board URL.
 func ParseBoardRef(raw string) (*BoardRef, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -75,16 +57,11 @@ func ParseBoardRef(raw string) (*BoardRef, error) {
 	}
 
 	if strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://") {
-		parsed, err := neturl.Parse(raw)
+		parsed, err := url.Parse(raw)
 		if err != nil {
 			return nil, ErrInvalidBoardURL
 		}
 		raw = parsed.Path
-	}
-
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil, ErrInvalidBoardURL
 	}
 
 	trimmed := strings.Trim(raw, "/")
@@ -100,9 +77,10 @@ func ParseBoardRef(raw string) (*BoardRef, error) {
 	}, nil
 }
 
-func FetchBoard(ctx context.Context, client *http.Client, cookiesHeader string, headersJSON string, userAgent string, rawURL string) (*BoardResponse, int, error) {
+// FetchBoard retrieves board metadata and all its sections/pins.
+func FetchBoard(ctx context.Context, client *http.Client, cookiesHeader, headersJSON, userAgent, rawURL string) (*BoardResponse, int, error) {
 	if client == nil {
-		return nil, 0, errors.New("http client is nil")
+		client = http.DefaultClient
 	}
 
 	ref, err := ParseBoardRef(rawURL)
@@ -116,7 +94,6 @@ func FetchBoard(ctx context.Context, client *http.Client, cookiesHeader string, 
 	}
 
 	metadata, _ := parsers.ExtractBoardMetadataFromHTML(string(pageBody))
-
 	sections, err := discoverBoardSections(ctx, client, cookiesHeader, headersJSON, userAgent, ref.SourceURL, pageBody)
 	if err != nil && !errors.Is(err, parsers.ErrBoardSectionsNotFound) {
 		return nil, status, err
@@ -126,23 +103,13 @@ func FetchBoard(ctx context.Context, client *http.Client, cookiesHeader string, 
 		Username: ref.Username,
 		Slug:     ref.Slug,
 		URL:      HomefeedBaseURL + ref.SourceURL,
-		Sections: make([]BoardSectionResult, 0, len(sections)),
+		Sections: make([]BoardSectionResult, 0),
 	}
 
+	// If no sections, fall back to main board feed
 	if len(sections) == 0 && metadata != nil {
-		// No sections found, fetch from board feed
-		body, feedStatus, feedErr := FetchBoardFeedPins(
-			ctx,
-			client,
-			cookiesHeader,
-			headersJSON,
-			userAgent,
-			ref.SourceURL,
-			metadata.ID,
-		)
-		if feedErr == nil && feedStatus >= 200 && feedStatus < 300 {
-			pins, pinErr := parsers.ExtractSearchPinsFromJSON(string(body))
-			if pinErr == nil {
+		if body, s, e := FetchBoardFeedPins(ctx, client, cookiesHeader, headersJSON, userAgent, ref.SourceURL, metadata.ID); e == nil && s == 200 {
+			if pins, pe := parsers.ExtractSearchPinsFromJSON(string(body)); pe == nil {
 				result.Sections = append(result.Sections, BoardSectionResult{
 					ID:    metadata.ID,
 					Slug:  "pins",
@@ -156,7 +123,7 @@ func FetchBoard(ctx context.Context, client *http.Client, cookiesHeader string, 
 	}
 
 	for _, section := range sections {
-		sectionURL := buildBoardSectionSourceURL(ref.SourceURL, section.Slug)
+		sectionURL := ref.SourceURL + strings.Trim(section.Slug, "/") + "/"
 		sectionResult := BoardSectionResult{
 			ID:    section.ID,
 			Slug:  section.Slug,
@@ -164,35 +131,17 @@ func FetchBoard(ctx context.Context, client *http.Client, cookiesHeader string, 
 			URL:   HomefeedBaseURL + sectionURL,
 		}
 
-		body, sectionStatus, sectionErr := FetchBoardSectionPins(
-			ctx,
-			client,
-			cookiesHeader,
-			headersJSON,
-			userAgent,
-			sectionURL,
-			section.ID,
-		)
-		if sectionErr != nil {
-			sectionResult.Error = sectionErr.Error()
-			result.Sections = append(result.Sections, sectionResult)
-			continue
+		body, s, e := FetchBoardSectionPins(ctx, client, cookiesHeader, headersJSON, userAgent, sectionURL, section.ID)
+		if e != nil {
+			sectionResult.Error = e.Error()
+		} else if s < 200 || s >= 300 {
+			sectionResult.Error = "upstream returned status " + http.StatusText(s)
+		} else if pins, pe := parsers.ExtractSearchPinsFromJSON(string(body)); pe != nil {
+			sectionResult.Error = pe.Error()
+		} else {
+			sectionResult.Pins = pins
+			sectionResult.Count = len(pins)
 		}
-		if sectionStatus < 200 || sectionStatus >= 300 {
-			sectionResult.Error = "upstream returned status " + http.StatusText(sectionStatus)
-			result.Sections = append(result.Sections, sectionResult)
-			continue
-		}
-
-		pins, pinErr := parsers.ExtractSearchPinsFromJSON(string(body))
-		if pinErr != nil {
-			sectionResult.Error = pinErr.Error()
-			result.Sections = append(result.Sections, sectionResult)
-			continue
-		}
-
-		sectionResult.Pins = pins
-		sectionResult.Count = len(pins)
 		result.Sections = append(result.Sections, sectionResult)
 	}
 
@@ -200,15 +149,9 @@ func FetchBoard(ctx context.Context, client *http.Client, cookiesHeader string, 
 	return result, status, nil
 }
 
-func discoverBoardSections(ctx context.Context, client *http.Client, cookiesHeader string, headersJSON string, userAgent string, sourceURL string, pageBody []byte) ([]parsers.BoardSection, error) {
+func discoverBoardSections(ctx context.Context, client *http.Client, cookiesHeader, headersJSON, userAgent, sourceURL string, pageBody []byte) ([]parsers.BoardSection, error) {
 	if sections, err := parsers.ExtractBoardSectionsFromHTML(string(pageBody)); err == nil {
 		return sections, nil
-	}
-
-	if publicHTML, err := FetchHTML(HomefeedBaseURL + sourceURL); err == nil {
-		if sections, err := parsers.ExtractBoardSectionsFromHTML(publicHTML); err == nil {
-			return sections, nil
-		}
 	}
 
 	parentBody, _, err := FetchBoardParentResource(ctx, client, cookiesHeader, headersJSON, userAgent, sourceURL)
@@ -218,194 +161,112 @@ func discoverBoardSections(ctx context.Context, client *http.Client, cookiesHead
 	return parsers.ExtractBoardSectionsFromJSON(string(parentBody))
 }
 
-func buildBoardSectionSourceURL(boardSourceURL string, sectionSlug string) string {
-	return boardSourceURL + strings.Trim(sectionSlug, "/") + "/"
-}
-
-func FetchBoardParentResource(ctx context.Context, client *http.Client, cookiesHeader string, headersJSON string, userAgent string, sourceURL string) ([]byte, int, error) {
-	payload := boardParentPayload{
-		Options: map[string]any{
+func FetchBoardParentResource(ctx context.Context, client *http.Client, cookiesHeader, headersJSON, userAgent, sourceURL string) ([]byte, int, error) {
+	payload := map[string]any{
+		"options": map[string]any{
 			"data": map[string]any{
-				"appVersion":     "",
-				"auxData":        map[string]any{"stage": "prod"},
-				"browser":        1,
-				"clientUUID":     "",
-				"event_type":     7137,
 				"time":           nowFunc().UnixNano(),
-				"unauth_id":      "",
 				"view_type":      5,
 				"view_parameter": 3070,
 			},
 		},
-		Context: map[string]any{},
+		"context": map[string]any{},
 	}
 
-	raw, err := json.Marshal(payload)
-	if err != nil {
-		return nil, 0, err
-	}
-
+	raw, _ := json.Marshal(payload)
 	form := url.Values{}
 	form.Set("source_url", sourceURL)
 	form.Set("data", string(raw))
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, HomefeedBaseURL+defaultBoardParentPath, strings.NewReader(form.Encode()))
-	if err != nil {
-		return nil, 0, err
-	}
-
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, HomefeedBaseURL+defaultBoardParentPath, strings.NewReader(form.Encode()))
 	applyCapturedHeaders(req, headersJSON)
-	applyDefaultHeaders(req, sourceURL, userAgent, cookiesHeader)
+	applyDefaultHeaders(req, sourceURL, userAgent, cookiesHeader, defaultBoardPageHandler)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("Origin", defaultOrigin)
-	req.Header.Set("X-Pinterest-PWS-Handler", defaultBoardPageHandler)
-	req.Header.Set("X-Pinterest-AppState", defaultAppState)
 
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, 0, err
 	}
-	defer func() {
-		_ = resp.Body.Close()
-	}()
+	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, resp.StatusCode, err
-	}
-
+	body, _ := io.ReadAll(resp.Body)
 	return body, resp.StatusCode, nil
 }
 
-func FetchBoardPage(ctx context.Context, client *http.Client, cookiesHeader string, headersJSON string, userAgent string, sourceURL string) ([]byte, int, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, HomefeedBaseURL+sourceURL, nil)
-	if err != nil {
-		return nil, 0, err
-	}
-
+func FetchBoardPage(ctx context.Context, client *http.Client, cookiesHeader, headersJSON, userAgent, sourceURL string) ([]byte, int, error) {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, HomefeedBaseURL+sourceURL, nil)
 	applyCapturedHeaders(req, headersJSON)
-	if userAgent != "" {
-		req.Header.Set("User-Agent", userAgent)
-	} else {
-		req.Header.Set("User-Agent", defaultUserAgent)
-	}
+	applyDefaultHeaders(req, sourceURL, userAgent, cookiesHeader, "")
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-	req.Header.Set("Accept-Language", defaultAcceptLang)
-	req.Header.Set("Referer", defaultReferer)
-	if cookiesHeader != "" {
-		req.Header.Set("Cookie", cookiesHeader)
-	}
 
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, 0, err
 	}
-	defer func() {
-		_ = resp.Body.Close()
-	}()
+	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, resp.StatusCode, err
-	}
-
+	body, _ := io.ReadAll(resp.Body)
 	return body, resp.StatusCode, nil
 }
 
-func FetchBoardSectionPins(ctx context.Context, client *http.Client, cookiesHeader string, headersJSON string, userAgent string, sourceURL string, sectionID string) ([]byte, int, error) {
-	if sectionID == "" {
-		return nil, 0, errors.New("missing section id")
+func FetchBoardSectionPins(ctx context.Context, client *http.Client, cookiesHeader, headersJSON, userAgent, sourceURL, sectionID string) ([]byte, int, error) {
+	options := map[string]any{
+		"currentFilter":        -1,
+		"field_set_key":        "react_grid_pin",
+		"page_size":            25,
+		"redux_normalize_feed": true,
+		"section_id":           sectionID,
 	}
 
-	payload := boardSectionPinsPayload{
-		Context: map[string]any{},
-	}
-	payload.Options.CurrentFilter = -1
-	payload.Options.FieldSetKey = "react_grid_pin"
-	payload.Options.IsOwnProfilePins = false
-	payload.Options.PageSize = 25
-	payload.Options.ReduxNormalizeFee = true
-	payload.Options.SectionID = sectionID
-	payload.Options.OrbacSubjectID = ""
-
-	raw, err := json.Marshal(payload)
-	if err != nil {
-		return nil, 0, err
-	}
-
-	requestURL := HomefeedBaseURL + defaultBoardPinsPath + "?source_url=" + neturl.QueryEscape(sourceURL) + "&data=" + neturl.QueryEscape(string(raw)) + "&_=" + strconv.FormatInt(nowFunc().UnixMilli(), 10)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
-	if err != nil {
-		return nil, 0, err
-	}
-
-	applyCapturedHeaders(req, headersJSON)
-	applyDefaultHeaders(req, sourceURL, userAgent, cookiesHeader)
-	req.Header.Set("X-Pinterest-PWS-Handler", defaultBoardPinsHandler)
-	req.Header.Set("X-Pinterest-AppState", defaultAppState)
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, 0, err
-	}
-	defer func() {
-		_ = resp.Body.Close()
-	}()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, resp.StatusCode, err
-	}
-
-	return body, resp.StatusCode, nil
-}
-func FetchBoardFeedPins(ctx context.Context, client *http.Client, cookiesHeader string, headersJSON string, userAgent string, sourceURL string, boardID string) ([]byte, int, error) {
-	payload := map[string]any{
-		"options": map[string]any{
-			"board_id":             boardID,
-			"board_url":            sourceURL,
-			"currentFilter":        -1,
-			"field_set_key":        "react_grid_pin",
-			"filter_section_pins":  true,
-			"sort":                 "default",
-			"layout":               "featured_board",
-			"page_size":            25,
-			"redux_normalize_feed": true,
-		},
-		"context": map[string]any{},
-	}
-
-	raw, err := json.Marshal(payload)
-	if err != nil {
-		return nil, 0, err
-	}
-
+	raw, _ := json.Marshal(map[string]any{"options": options, "context": map[string]any{}})
 	params := url.Values{}
 	params.Set("source_url", sourceURL)
 	params.Set("data", string(raw))
 	params.Set("_", strconv.FormatInt(nowFunc().UnixMilli(), 10))
 
-	requestURL := HomefeedBaseURL + "/resource/BoardFeedResource/get/?" + params.Encode()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
-	if err != nil {
-		return nil, 0, err
-	}
-
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, HomefeedBaseURL+defaultBoardPinsPath+"?"+params.Encode(), nil)
 	applyCapturedHeaders(req, headersJSON)
-	applyDefaultHeaders(req, sourceURL, userAgent, cookiesHeader)
+	applyDefaultHeaders(req, sourceURL, userAgent, cookiesHeader, defaultBoardPinsHandler)
 
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, 0, err
 	}
-	defer func() {
-		_ = resp.Body.Close()
-	}()
+	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, resp.StatusCode, err
+	body, _ := io.ReadAll(resp.Body)
+	return body, resp.StatusCode, nil
+}
+
+func FetchBoardFeedPins(ctx context.Context, client *http.Client, cookiesHeader, headersJSON, userAgent, sourceURL, boardID string) ([]byte, int, error) {
+	options := map[string]any{
+		"board_id":             boardID,
+		"board_url":            sourceURL,
+		"currentFilter":        -1,
+		"field_set_key":        "react_grid_pin",
+		"filter_section_pins":  true,
+		"sort":                 "default",
+		"layout":               "featured_board",
+		"page_size":            25,
+		"redux_normalize_feed": true,
 	}
 
+	raw, _ := json.Marshal(map[string]any{"options": options, "context": map[string]any{}})
+	params := url.Values{}
+	params.Set("source_url", sourceURL)
+	params.Set("data", string(raw))
+	params.Set("_", strconv.FormatInt(nowFunc().UnixMilli(), 10))
+
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, HomefeedBaseURL+"/resource/BoardFeedResource/get/?"+params.Encode(), nil)
+	applyCapturedHeaders(req, headersJSON)
+	applyDefaultHeaders(req, sourceURL, userAgent, cookiesHeader, defaultBoardPageHandler)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
 	return body, resp.StatusCode, nil
 }

@@ -54,6 +54,7 @@ POST /api/login
 GET /api/homefeed
 GET /api/search
 GET /api/board
+GET /api/user
 ```
 
 # Usage
@@ -105,6 +106,14 @@ Fetch a board and all of its child sections, including extracted pins for each s
 
 Example:
   curl "http://localhost:8080/api/board?url=https://www.pinterest.com/Skatbad07/inspo/" | jq
+```
+
+## `GET /api/user?url=<USER_URL>`
+```sh
+Fetch user profile metadata (follower count, bio, etc.) and a list of their public boards.
+
+Example:
+  curl "http://localhost:8080/api/user?url=https://www.pinterest.com/686udjie/" | jq
 ```
 
 # Session Setup
