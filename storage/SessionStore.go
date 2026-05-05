@@ -32,6 +32,13 @@ type Session struct {
 	ExpiresAt     sql.NullTime
 }
 
+func SessionExpired(session *Session) bool {
+	if session == nil {
+		return true
+	}
+	return session.ExpiresAt.Valid && time.Now().After(session.ExpiresAt.Time)
+}
+
 type SessionStore interface {
 	GetSession(ctx context.Context, id string) (*Session, error)
 	UpsertSession(ctx context.Context, session *Session) error

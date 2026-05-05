@@ -22,7 +22,7 @@ PINTEREST_PASSWORD=your_password
 
 Notes:
 - `POST /api/login` needs `DATABASE_URL`
-- `GET /api/homefeed`, `GET /api/search`, and `GET /api/board` use the full authenticated setup above
+- `GET /api/homefeed`, `GET /api/search`, `GET /api/board`, and `GET /api/react` use the full authenticated setup above
 - `PINTEREST_AUTH_CONFIRMED` is auto-enabled when running via `go run .`
 - if `PINTEREST_EMAIL` and `PINTEREST_PASSWORD` are set, authenticated endpoints can auto-refresh the stored session without manually calling `/api/login`
 
@@ -55,6 +55,7 @@ GET /api/homefeed
 GET /api/search
 GET /api/board
 GET /api/user
+GET /api/react
 ```
 
 # Usage
@@ -114,6 +115,15 @@ Fetch user profile metadata (follower count, bio, etc.) and a list of their publ
 
 Example:
   curl "http://localhost:8080/api/user?url=https://www.pinterest.com/686udjie/" | jq
+```
+
+## `GET /api/react`
+```sh
+React to a pin.
+
+Examples:
+  curl "http://localhost:8080/api/react?like&url=https://www.pinterest.com/pin/752241944045890914/" | jq
+  curl "http://localhost:8080/api/react?unlike&id=752241944045890914" | jq
 ```
 
 # Session Setup

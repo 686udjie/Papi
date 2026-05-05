@@ -57,7 +57,7 @@ func (a *App) User(w http.ResponseWriter, r *http.Request) {
 	var cookiesHeader string
 	client := a.httpClient()
 	session, _ := a.Store.GetSession(r.Context(), storage.DefaultSessionID)
-	if session != nil && !sessionExpired(session) {
+	if session != nil && !storage.SessionExpired(session) {
 		cookiesHeader = session.CookiesHeader
 	}
 
@@ -221,6 +221,94 @@ func (a *App) Board(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
+func (a *App) React(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{
+			"error": "method not allowed",
+		})
+		return
+	}
+
+	action, err := parseReactActionFromQuery(r)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	pinID := strings.TrimSpace(r.URL.Query().Get("id"))
+	if pinID == "" {
+		rawURL := strings.TrimSpace(r.URL.Query().Get("url"))
+		if rawURL == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing id or url"})
+			return
+		}
+		pinID = services.ExtractPinIDFromURL(rawURL)
+		if pinID == "" {
+			pinID = services.ExtractPinID(rawURL)
+		}
+	}
+	if pinID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": services.ErrMissingPinID.Error()})
+		return
+	}
+
+	// For check action, session is optional but recommended
+	// For like/unlike actions, session is required
+	var session *storage.Session
+	
+	if action != "check" {
+		session, err = a.requireSession(w, r)
+		if err != nil {
+			return
+		}
+	} else {
+		// For check, try to get session but don't require it
+		if a.Store != nil {
+			session, _ = a.Store.GetSession(r.Context(), storage.DefaultSessionID)
+		}
+	}
+
+	var result *services.LikeResponse
+	switch action {
+	case "like":
+		result, err = services.LikePin(r.Context(), a.httpClient(), session.CookiesHeader, session.HeadersJSON, session.UserAgent, pinID)
+	case "unlike":
+		result, err = services.UnlikePin(r.Context(), a.httpClient(), session.CookiesHeader, session.HeadersJSON, session.UserAgent, pinID)
+	default:
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": services.ErrInvalidAction.Error()})
+		return
+	}
+	if err != nil {
+		switch {
+		case errors.Is(err, services.ErrMissingPinID),
+			errors.Is(err, services.ErrMissingAction),
+			errors.Is(err, services.ErrInvalidAction):
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		default:
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
+func parseReactActionFromQuery(r *http.Request) (string, error) {
+	like := r.URL.Query().Has("like")
+	unlike := r.URL.Query().Has("unlike")
+	if like && unlike {
+		return "", errors.New("cannot specify both like and unlike")
+	}
+	if like {
+		return "like", nil
+	}
+	if unlike {
+		return "unlike", nil
+	}
+	return "", errors.New("must specify either like or unlike")
+}
+
 func (a *App) fetchSearchResponse(w http.ResponseWriter, r *http.Request) ([]byte, error) {
 	query, rs, ok := parseSearchRequest(w, r)
 	if !ok {
@@ -321,7 +409,7 @@ func (a *App) handleUpstreamStatus(w http.ResponseWriter, body []byte, status in
 
 func (a *App) ensurePinterestSession(ctx context.Context) (*storage.Session, error) {
 	session, err := a.Store.GetSession(ctx, storage.DefaultSessionID)
-	if err == nil && !sessionExpired(session) {
+	if err == nil && !storage.SessionExpired(session) {
 		return session, nil
 	}
 	if err != nil && !errors.Is(err, storage.ErrSessionNotFound) {
@@ -342,13 +430,6 @@ func (a *App) ensurePinterestSession(ctx context.Context) (*storage.Session, err
 	}
 
 	return a.Store.GetSession(ctx, storage.DefaultSessionID)
-}
-
-func sessionExpired(session *storage.Session) bool {
-	if session == nil {
-		return true
-	}
-	return session.ExpiresAt.Valid && time.Now().After(session.ExpiresAt.Time)
 }
 
 func writeSessionError(w http.ResponseWriter, err error) {
