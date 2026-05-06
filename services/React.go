@@ -1,16 +1,15 @@
 package services
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 const (
@@ -26,151 +25,78 @@ const (
 )
 
 var (
+	likeState = make(map[string]bool)
+	stateMutex sync.RWMutex
+)
+
+var (
 	ErrMissingPinID  = errors.New("missing pin id")
-	ErrInvalidAction = errors.New("invalid action, must be like or unlike")
+	ErrInvalidAction = errors.New("invalid action, must be like, unlike, or check")
 	ErrMissingAction = errors.New("missing action parameter")
 	ErrLikeFailed    = errors.New("failed to like pin")
 	ErrUnlikeFailed  = errors.New("failed to unlike pin")
+	ErrCheckFailed   = errors.New("failed to check like status")
 )
 
 type LikeResponse struct {
-	State string `json:"state,omitempty"`
-	PinID string `json:"pin_id,omitempty"`
+	State  string `json:"state,omitempty"`
+	PinID  string `json:"pin_id,omitempty"`
+	Action string `json:"action,omitempty"`
 }
 
 func LikePin(ctx context.Context, client *http.Client, cookiesHeader, headersJSON, userAgent, pinID string) (*LikeResponse, error) {
-	return performCreateReact(ctx, client, cookiesHeader, headersJSON, userAgent, pinID, LikeReactionType, "like")
-}
-
-func UnlikePin(ctx context.Context, client *http.Client, cookiesHeader, headersJSON, userAgent, pinID string) (*LikeResponse, error) {
-	return performDeleteReact(ctx, client, cookiesHeader, headersJSON, userAgent, pinID)
-}
-
-func unmarshalPossiblyWrappedJSON(body []byte, target any) error {
-	if len(body) == 0 {
-		return errors.New("empty body")
-	}
-	trimmed := bytes.TrimSpace(body)
-	if err := json.Unmarshal(trimmed, target); err == nil {
-		return nil
-	}
-
-	// Pinterest sometimes prefixes responses (e.g. "for (;;);") or returns extra bytes.
-	start := bytes.IndexByte(trimmed, '{')
-	end := bytes.LastIndexByte(trimmed, '}')
-	if start >= 0 && end > start {
-		candidate := trimmed[start : end+1]
-		if err := json.Unmarshal(candidate, target); err == nil {
-			return nil
-		}
-	}
-	return errors.New("invalid json")
-}
-
-func buildReactPayload(pinID string, includeReactionType bool) (map[string]any, error) {
-	data := map[string]any{
-		"client_tracking_params": ClientTrackingParam,
-	}
-	
-	if includeReactionType {
-		data["reaction_type"] = LikeReactionType
-	}
-	
-	options := map[string]any{
-		"url":  fmt.Sprintf(PinResourceTemplate, pinID),
-		"data": data,
-	}
-	
-	return map[string]any{
-		"options": options,
-		"context": map[string]any{},
-	}, nil
-}
-
-func createReactRequest(ctx context.Context, endpoint, pinID string, payload map[string]any) (*http.Request, error) {
-	raw, err := json.Marshal(payload)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal payload: %w", err)
-	}
-
-	form := url.Values{}
-	form.Set("source_url", fmt.Sprintf(PinURLTemplate, pinID))
-	form.Set("data", string(raw))
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, PinterestAPIBase+endpoint, strings.NewReader(form.Encode()))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", ContentType)
-	return req, nil
-}
-
-func executeRequest(client *http.Client, req *http.Request) ([]byte, error) {
-	if client == nil {
-		client = http.DefaultClient
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("upstream returned status %s, body: %s", resp.Status, string(body))
-	}
-
-	return io.ReadAll(resp.Body)
-}
-
-func validateResponse(body []byte) error {
-	var response map[string]any
-	if err := json.Unmarshal(body, &response); err != nil {
-		return fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	if resourceData, ok := response["resource_response"].(map[string]any); ok {
-		if status, ok := resourceData["status"].(string); ok {
-			if status == "success" {
-				return nil
-			}
-		}
-	}
-	return errors.New("operation not successful")
-}
-
-func performCreateReact(ctx context.Context, client *http.Client, cookiesHeader, headersJSON, userAgent, pinID string, reactionType int, action string) (*LikeResponse, error) {
 	if pinID == "" {
 		return nil, ErrMissingPinID
 	}
 
-	payload, err := buildReactPayload(pinID, true)
+	err := performReact(ctx, client, cookiesHeader, headersJSON, userAgent, pinID, true)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %v", ErrLikeFailed, err)
 	}
 
-	req, err := createReactRequest(ctx, APICreateEndpoint, pinID, payload)
+	stateMutex.Lock()
+	likeState[pinID] = true
+	stateMutex.Unlock()
+
+	return &LikeResponse{
+		State: "liked",
+		PinID: pinID,
+	}, nil
+}
+
+func UnlikePin(ctx context.Context, client *http.Client, cookiesHeader, headersJSON, userAgent, pinID string) (*LikeResponse, error) {
+	if pinID == "" {
+		return nil, ErrMissingPinID
+	}
+
+	err := performReact(ctx, client, cookiesHeader, headersJSON, userAgent, pinID, false)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %v", ErrUnlikeFailed, err)
 	}
 
-	applyDefaultHeaders(req, fmt.Sprintf(PinURLTemplate, pinID), userAgent, cookiesHeader, ScriptName)
-	applyCapturedHeaders(req, headersJSON)
+	// Update local state
+	stateMutex.Lock()
+	likeState[pinID] = false
+	stateMutex.Unlock()
 
-	body, err := executeRequest(client, req)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %v", reactionErrorForAction(action), err)
+	return &LikeResponse{
+		State: "unliked",
+		PinID: pinID,
+	}, nil
+}
+
+func CheckLikeStatus(ctx context.Context, client *http.Client, cookiesHeader, headersJSON, userAgent, pinID string) (*LikeResponse, error) {
+	if pinID == "" {
+		return nil, ErrMissingPinID
 	}
 
-	if err := validateResponse(body); err != nil {
-		return nil, fmt.Errorf("%w: %v", reactionErrorForAction(action), err)
-	}
+	stateMutex.RLock()
+	liked := likeState[pinID]
+	stateMutex.RUnlock()
 
-	state := "liked"
-	if reactionType != 1 {
-		state = "unliked"
+	state := "unliked"
+	if liked {
+		state = "liked"
 	}
 
 	return &LikeResponse{
@@ -179,46 +105,66 @@ func performCreateReact(ctx context.Context, client *http.Client, cookiesHeader,
 	}, nil
 }
 
-func performDeleteReact(ctx context.Context, client *http.Client, cookiesHeader, headersJSON, userAgent, pinID string) (*LikeResponse, error) {
+func performReact(ctx context.Context, client *http.Client, cookiesHeader, headersJSON, userAgent, pinID string, isLike bool) error {
 	if pinID == "" {
-		return nil, ErrMissingPinID
+		return ErrMissingPinID
 	}
 
-	payload, err := buildReactPayload(pinID, false)
-	if err != nil {
-		return nil, err
+	data := map[string]any{
+		"client_tracking_params": ClientTrackingParam,
+	}
+	if isLike {
+		data["reaction_type"] = LikeReactionType
 	}
 
-	req, err := createReactRequest(ctx, APIDeleteEndpoint, pinID, payload)
+	options := map[string]any{
+		"url":  fmt.Sprintf(PinResourceTemplate, pinID),
+		"data": data,
+	}
+
+	payload := map[string]any{
+		"options": options,
+		"context": map[string]any{},
+	}
+
+	raw, err := json.Marshal(payload)
 	if err != nil {
-		return nil, err
+		return fmt.Errorf("failed to marshal payload: %w", err)
+	}
+
+	form := url.Values{}
+	form.Set("source_url", fmt.Sprintf(PinURLTemplate, pinID))
+	form.Set("data", string(raw))
+
+	endpoint := APICreateEndpoint
+	if !isLike {
+		endpoint = APIDeleteEndpoint
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, PinterestAPIBase+endpoint, strings.NewReader(form.Encode()))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
 	}
 
 	applyDefaultHeaders(req, fmt.Sprintf(PinURLTemplate, pinID), userAgent, cookiesHeader, ScriptName)
 	applyCapturedHeaders(req, headersJSON)
+	req.Header.Set("Content-Type", ContentType)
 
-	body, err := executeRequest(client, req)
+	if client == nil {
+		client = http.DefaultClient
+	}
+
+	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrUnlikeFailed, err)
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("upstream returned status %s", resp.Status)
 	}
 
-	if err := validateResponse(body); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrUnlikeFailed, err)
-	}
-
-	return &LikeResponse{
-		State: "unliked",
-		PinID: pinID,
-	}, nil
-}
-
-func reactionErrorForAction(action string) error {
-	switch action {
-	case "unlike":
-		return ErrUnlikeFailed
-	default:
-		return ErrLikeFailed
-	}
+	return nil
 }
 
 func ExtractPinIDFromURL(rawURL string) string {

@@ -274,6 +274,8 @@ func (a *App) React(w http.ResponseWriter, r *http.Request) {
 		result, err = services.LikePin(r.Context(), a.httpClient(), session.CookiesHeader, session.HeadersJSON, session.UserAgent, pinID)
 	case "unlike":
 		result, err = services.UnlikePin(r.Context(), a.httpClient(), session.CookiesHeader, session.HeadersJSON, session.UserAgent, pinID)
+	case "check":
+		result, err = services.CheckLikeStatus(r.Context(), a.httpClient(), session.CookiesHeader, session.HeadersJSON, session.UserAgent, pinID)
 	default:
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": services.ErrInvalidAction.Error()})
 		return
@@ -284,6 +286,9 @@ func (a *App) React(w http.ResponseWriter, r *http.Request) {
 			errors.Is(err, services.ErrMissingAction),
 			errors.Is(err, services.ErrInvalidAction):
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		case errors.Is(err, services.ErrCheckFailed):
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 			return
 		default:
 			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
@@ -297,8 +302,15 @@ func (a *App) React(w http.ResponseWriter, r *http.Request) {
 func parseReactActionFromQuery(r *http.Request) (string, error) {
 	like := r.URL.Query().Has("like")
 	unlike := r.URL.Query().Has("unlike")
+	check := r.URL.Query().Has("check")
 	if like && unlike {
 		return "", errors.New("cannot specify both like and unlike")
+	}
+	if like && check {
+		return "", errors.New("cannot specify both like and check")
+	}
+	if unlike && check {
+		return "", errors.New("cannot specify both unlike and check")
 	}
 	if like {
 		return "like", nil
@@ -306,8 +318,12 @@ func parseReactActionFromQuery(r *http.Request) (string, error) {
 	if unlike {
 		return "unlike", nil
 	}
-	return "", errors.New("must specify either like or unlike")
+	if check {
+		return "check", nil
+	}
+	return "", errors.New("must specify either like, unlike, or check")
 }
+
 
 func (a *App) fetchSearchResponse(w http.ResponseWriter, r *http.Request) ([]byte, error) {
 	query, rs, ok := parseSearchRequest(w, r)

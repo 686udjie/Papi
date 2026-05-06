@@ -119,11 +119,12 @@ Example:
 
 ## `GET /api/react`
 ```sh
-React to a pin.
+React to a pin or check like status.
 
 Examples:
   curl "http://localhost:8080/api/react?like&url=https://www.pinterest.com/pin/752241944045890914/" | jq
   curl "http://localhost:8080/api/react?unlike&id=752241944045890914" | jq
+  curl "http://localhost:8080/api/react?check&id=752241944045890914" | jq
 ```
 
 # Session Setup
