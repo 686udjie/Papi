@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"papi/parsers"
 	"papi/services"
 	"papi/storage"
 )
@@ -167,20 +168,74 @@ func (a *App) Homefeed(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) Search(w http.ResponseWriter, r *http.Request) {
-	body, err := a.fetchSearchResponse(w, r)
+	query, _, ok := parseSearchRequest(w, r)
+	if !ok {
+		return
+	}
+
+	session, err := a.requireSession(w, r)
 	if err != nil {
 		return
 	}
 
-	pinsJSON, err := services.ExtractSearchPinsJSON(string(body))
+	// 1. Generate query variants
+	variants := services.GenerateQueryVariants(query)
+	// 2. Rotate (randomly pick one for diversity)
+	selectedQuery := variants[time.Now().UnixNano()%int64(len(variants))]
+
+	// 3. Get bookmark for the selected variant
+	bookmark, _ := a.Store.GetSearchBookmark(r.Context(), selectedQuery)
+
+	// 4. Fetch results
+	body, nextBookmark, status, err := services.FetchSearchResource(
+		r.Context(),
+		a.httpClient(),
+		session.CookiesHeader,
+		session.HeadersJSON,
+		session.UserAgent,
+		selectedQuery,
+		bookmark,
+	)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	if !a.handleUpstreamStatus(w, body, status) {
+		return
+	}
+
+	// 5. Extract pins
+	pins, err := parsers.ExtractSearchPinsFromJSON(string(body))
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(pinsJSON)
+	// 6. Deduplicate against global store
+	filteredPins := make([]map[string]any, 0, len(pins))
+	for _, pin := range pins {
+		id, ok := pin["id"].(string)
+		if !ok || id == "" {
+			continue
+		}
+		seen, _ := a.Store.IsPinSeen(r.Context(), id)
+		if !seen {
+			filteredPins = append(filteredPins, pin)
+			_ = a.Store.MarkPinSeen(r.Context(), id)
+		}
+	}
+
+	// 7. Update bookmark for the selected variant
+	if nextBookmark != "" && nextBookmark != bookmark {
+		_ = a.Store.UpdateSearchBookmark(r.Context(), selectedQuery, nextBookmark)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"pins":           filteredPins,
+		"count":          len(filteredPins),
+		"query_used":     selectedQuery,
+		"original_query": query,
+	})
 }
 
 func (a *App) Board(w http.ResponseWriter, r *http.Request) {
@@ -325,6 +380,7 @@ func parseReactActionFromQuery(r *http.Request) (string, error) {
 }
 
 
+// Deprecated: use FetchSearchResource in Search handler instead
 func (a *App) fetchSearchResponse(w http.ResponseWriter, r *http.Request) ([]byte, error) {
 	query, rs, ok := parseSearchRequest(w, r)
 	if !ok {

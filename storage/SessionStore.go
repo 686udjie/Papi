@@ -43,6 +43,14 @@ type SessionStore interface {
 	GetSession(ctx context.Context, id string) (*Session, error)
 	UpsertSession(ctx context.Context, session *Session) error
 	UpdateBookmark(ctx context.Context, id string, bookmark string) error
+
+	// Deduplication
+	IsPinSeen(ctx context.Context, pinID string) (bool, error)
+	MarkPinSeen(ctx context.Context, pinID string) error
+
+	// Per-query bookmarks
+	GetSearchBookmark(ctx context.Context, query string) (string, error)
+	UpdateSearchBookmark(ctx context.Context, query string, bookmark string) error
 }
 
 type PostgresStore struct {
@@ -165,6 +173,46 @@ func (p *PostgresStore) UpdateBookmark(ctx context.Context, id string, bookmark 
 	return err
 }
 
+func (p *PostgresStore) IsPinSeen(ctx context.Context, pinID string) (bool, error) {
+	var exists bool
+	err := p.db.QueryRowContext(ctx, `
+		SELECT EXISTS(SELECT 1 FROM seen_pins WHERE pin_id = $1)
+	`, pinID).Scan(&exists)
+	return exists, err
+}
+
+func (p *PostgresStore) MarkPinSeen(ctx context.Context, pinID string) error {
+	_, err := p.db.ExecContext(ctx, `
+		INSERT INTO seen_pins (pin_id, last_seen)
+		VALUES ($1, $2)
+		ON CONFLICT (pin_id) DO UPDATE SET last_seen = EXCLUDED.last_seen
+	`, pinID, time.Now().UTC())
+	return err
+}
+
+func (p *PostgresStore) GetSearchBookmark(ctx context.Context, query string) (string, error) {
+	var bookmark string
+	err := p.db.QueryRowContext(ctx, `
+		SELECT bookmark FROM search_bookmarks WHERE query = $1
+	`, query).Scan(&bookmark)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", nil
+		}
+		return "", err
+	}
+	return bookmark, nil
+}
+
+func (p *PostgresStore) UpdateSearchBookmark(ctx context.Context, query string, bookmark string) error {
+	_, err := p.db.ExecContext(ctx, `
+		INSERT INTO search_bookmarks (query, bookmark, updated_at)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (query) DO UPDATE SET bookmark = EXCLUDED.bookmark, updated_at = EXCLUDED.updated_at
+	`, query, bookmark, time.Now().UTC())
+	return err
+}
+
 func (p *PostgresStore) ensureSchema() error {
 	_, err := p.db.Exec(`
 		CREATE TABLE IF NOT EXISTS sessions (
@@ -193,6 +241,23 @@ func (p *PostgresStore) ensureSchema() error {
 		return err
 	}
 	if _, err := p.db.Exec(`ALTER TABLE sessions ADD COLUMN IF NOT EXISTS source_url TEXT`); err != nil {
+		return err
+	}
+	if _, err := p.db.Exec(`
+		CREATE TABLE IF NOT EXISTS seen_pins (
+			pin_id TEXT PRIMARY KEY,
+			last_seen TIMESTAMPTZ NOT NULL
+		)
+	`); err != nil {
+		return err
+	}
+	if _, err := p.db.Exec(`
+		CREATE TABLE IF NOT EXISTS search_bookmarks (
+			query TEXT PRIMARY KEY,
+			bookmark TEXT NOT NULL,
+			updated_at TIMESTAMPTZ NOT NULL
+		)
+	`); err != nil {
 		return err
 	}
 	return nil
