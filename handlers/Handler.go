@@ -168,7 +168,7 @@ func (a *App) Homefeed(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) Search(w http.ResponseWriter, r *http.Request) {
-	query, _, ok := parseSearchRequest(w, r)
+	query, rs, filter, ok := parseSearchRequest(w, r)
 	if !ok {
 		return
 	}
@@ -195,7 +195,26 @@ func (a *App) Search(w http.ResponseWriter, r *http.Request) {
 		session.UserAgent,
 		selectedQuery,
 		bookmark,
+		filter,
+		rs,
 	)
+
+	isHTML := false
+	if err != nil || status == http.StatusNotFound || status == http.StatusForbidden {
+		// Fallback to HTML page
+		body, status, err = services.FetchSearchPage(
+			r.Context(),
+			a.httpClient(),
+			session.CookiesHeader,
+			session.HeadersJSON,
+			session.UserAgent,
+			selectedQuery,
+			rs,
+			filter,
+		)
+		isHTML = true
+	}
+
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
@@ -204,25 +223,67 @@ func (a *App) Search(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 5. Extract pins
-	pins, err := parsers.ExtractSearchPinsFromJSON(string(body))
-	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
-		return
-	}
+	// 5. Extract results based on filter
+	var finalResults any
+	var resultCount int
 
-	// 6. Deduplicate against global store
-	filteredPins := make([]map[string]any, 0, len(pins))
-	for _, pin := range pins {
-		id, ok := pin["id"].(string)
-		if !ok || id == "" {
-			continue
+	switch filter {
+	case services.FilterBoards:
+		var boards []parsers.BoardMetadata
+		if isHTML {
+			boards, err = parsers.ExtractBoardsFromHTML(string(body))
+		} else {
+			boards, err = parsers.ExtractBoardsFromJSON(string(body))
 		}
-		seen, _ := a.Store.IsPinSeen(r.Context(), id)
-		if !seen {
-			filteredPins = append(filteredPins, pin)
-			_ = a.Store.MarkPinSeen(r.Context(), id)
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+			return
 		}
+		finalResults = boards
+		resultCount = len(boards)
+
+	case services.FilterUsers:
+		var users []parsers.UserMetadata
+		if isHTML {
+			users, err = parsers.ExtractUsersFromHTML(string(body))
+		} else {
+			users, err = parsers.ExtractUsersFromJSON(string(body))
+		}
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+			return
+		}
+		finalResults = users
+		resultCount = len(users)
+
+	default:
+		// Default to pins (including videos and products)
+		var pins []map[string]any
+		if isHTML {
+			pins, err = parsers.ExtractSearchPinsFromHTML(string(body))
+		} else {
+			pins, err = parsers.ExtractSearchPinsFromJSON(string(body))
+		}
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+			return
+		}
+
+		// 6. Deduplicate against global store
+		filteredPins := make([]map[string]any, 0, len(pins))
+		for _, pin := range pins {
+			id, ok := pin["id"].(string)
+			if !ok || id == "" {
+				continue
+			}
+			seen, _ := a.Store.IsPinSeen(r.Context(), id)
+			if !seen {
+				filteredPins = append(filteredPins, pin)
+				_ = a.Store.MarkPinSeen(r.Context(), id)
+			}
+		}
+		finalResults = filteredPins
+		resultCount = len(filteredPins)
 	}
 
 	// 7. Update bookmark for the selected variant
@@ -230,12 +291,24 @@ func (a *App) Search(w http.ResponseWriter, r *http.Request) {
 		_ = a.Store.UpdateSearchBookmark(r.Context(), selectedQuery, nextBookmark)
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
-		"pins":           filteredPins,
-		"count":          len(filteredPins),
+	response := map[string]any{
+		"count":          resultCount,
 		"query_used":     selectedQuery,
 		"original_query": query,
-	})
+		"filter":         filter,
+	}
+	
+	// Add results with appropriate key
+	switch filter {
+	case services.FilterBoards:
+		response["boards"] = finalResults
+	case services.FilterUsers:
+		response["users"] = finalResults
+	default:
+		response["pins"] = finalResults
+	}
+
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (a *App) Board(w http.ResponseWriter, r *http.Request) {
@@ -380,48 +453,22 @@ func parseReactActionFromQuery(r *http.Request) (string, error) {
 }
 
 
-// Deprecated: use FetchSearchResource in Search handler instead
-func (a *App) fetchSearchResponse(w http.ResponseWriter, r *http.Request) ([]byte, error) {
-	query, rs, ok := parseSearchRequest(w, r)
-	if !ok {
-		return nil, errors.New("invalid search request")
-	}
-	session, err := a.requireSession(w, r)
-	if err != nil {
-		return nil, err
-	}
 
-	body, status, err := services.FetchSearchPage(
-		r.Context(),
-		a.httpClient(),
-		session.CookiesHeader,
-		session.HeadersJSON,
-		session.UserAgent,
-		query,
-		rs,
-	)
-	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
-		return nil, err
-	}
-	if !a.handleUpstreamStatus(w, body, status) {
-		return nil, errors.New("upstream returned non-success status")
-	}
-
-	return body, nil
-}
-
-func parseSearchRequest(w http.ResponseWriter, r *http.Request) (string, string, bool) {
+func parseSearchRequest(w http.ResponseWriter, r *http.Request) (string, string, string, bool) {
 	query := strings.TrimSpace(r.URL.Query().Get("q"))
 	if query == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing q"})
-		return "", "", false
+		return "", "", "", false
 	}
 	rs := strings.TrimSpace(r.URL.Query().Get("rs"))
 	if rs == "" {
 		rs = "typed"
 	}
-	return query, rs, true
+	filter := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("filter")))
+	if filter == "" {
+		filter = services.FilterPins
+	}
+	return query, rs, filter, true
 }
 
 func (a *App) requireSession(w http.ResponseWriter, r *http.Request) (*storage.Session, error) {

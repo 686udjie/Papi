@@ -93,12 +93,23 @@ Example:
     -d '{"email":"you@example.com","password":"your_password"}' | jq
 ```
 
-## `GET /api/search?q=<QUERY>&rs=<SOURCE>`
+## `GET /api/search?q=<QUERY>&rs=<SOURCE>&filter=<FILTER>`
 ```sh
-Fetch extracted pin objects from a Pinterest search results page.
+Fetch extracted objects from a Pinterest search results page.
 
-Example:
+Filters:
+- pins (default): All pins
+- videos: Only video pins
+- boards: Pinterest boards matching the query
+- users: Pinterest profiles matching the query
+- products: Pins with commerce/shopping metadata
+
+Examples:
   curl "http://localhost:8080/api/search?q=hello&rs=typed" | jq
+  curl "http://localhost:8080/api/search?q=anime&filter=videos" | jq
+  curl "http://localhost:8080/api/search?q=aesthetic&filter=boards" | jq
+  curl "http://localhost:8080/api/search?q=686udjie&filter=users" | jq
+  curl "http://localhost:8080/api/search?q=keyboard&filter=products" | jq
 ```
 
 ## `GET /api/board?url=<BOARD_URL>`

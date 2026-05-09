@@ -9,20 +9,42 @@ import (
 	"net/url"
 	"strconv"
 	"time"
-
-	"papi/parsers"
 )
 
 const defaultSearchRS = "typed"
 
-func BuildSearchSourceURL(query string, rs string) string {
+const (
+	FilterPins     = "pins"
+	FilterVideos   = "videos"
+	FilterBoards   = "boards"
+	FilterUsers    = "users"
+	FilterProducts = "products"
+)
+
+func BuildSearchSourceURL(query string, rs string, filter string) string {
 	if rs == "" {
 		rs = defaultSearchRS
 	}
 	values := url.Values{}
 	values.Set("q", query)
 	values.Set("rs", rs)
-	return "/search/pins/?" + values.Encode()
+
+	path := "/search/pins/"
+	switch filter {
+	case FilterVideos:
+		path = "/search/videos/"
+	case FilterBoards:
+		path = "/search/boards/"
+	case FilterUsers:
+		path = "/search/users/"
+	case FilterProducts:
+		path = "/search/pins/"
+		values.Set("filter_location", "1")
+		values.Set("commerce_only", "true")
+		values.Set("rs", "content_type_filter")
+	}
+
+	return path + "?" + values.Encode()
 }
 
 func GenerateQueryVariants(query string) []string {
@@ -38,7 +60,7 @@ func GenerateQueryVariants(query string) []string {
 	}
 }
 
-func FetchSearchResource(ctx context.Context, client *http.Client, cookiesHeader string, headersJSON string, userAgent string, query string, bookmark string) ([]byte, string, int, error) {
+func FetchSearchResource(ctx context.Context, client *http.Client, cookiesHeader string, headersJSON string, userAgent string, query string, bookmark string, filter string, rs string) ([]byte, string, int, error) {
 	if client == nil {
 		return nil, "", 0, errors.New("http client is nil")
 	}
@@ -46,11 +68,32 @@ func FetchSearchResource(ctx context.Context, client *http.Client, cookiesHeader
 		return nil, "", 0, errors.New("missing search query")
 	}
 
+	resourceName := "BaseSearchResource"
+	scope := "pins"
+
 	options := map[string]any{
 		"query":         query,
-		"scope":         "pins",
-		"field_set_key": "unauth_react", // Common field set for pins
+		"scope":         scope,
+		"field_set_key": "unauth_react",
 	}
+
+	switch filter {
+	case FilterVideos:
+		options["scope"] = "videos"
+	case FilterBoards:
+		resourceName = "SearchResource"
+		options["scope"] = "boards"
+		options["field_set_key"] = "detailed"
+	case FilterUsers:
+		resourceName = "SearchResource"
+		options["scope"] = "people"
+		options["field_set_key"] = "detailed"
+	case FilterProducts:
+		options["scope"] = "pins"
+		options["commerce_only"] = true
+		options["filter_location"] = 1
+	}
+
 	if bookmark != "" {
 		options["bookmarks"] = []string{bookmark}
 	}
@@ -64,8 +107,8 @@ func FetchSearchResource(ctx context.Context, client *http.Client, cookiesHeader
 		return nil, "", 0, err
 	}
 
-	sourceURL := BuildSearchSourceURL(query, "typed")
-	u, _ := url.Parse(HomefeedBaseURL + "/resource/BaseSearchResource/get/")
+	sourceURL := BuildSearchSourceURL(query, rs, filter)
+	u, _ := url.Parse(HomefeedBaseURL + "/resource/" + resourceName + "/get/")
 	q := u.Query()
 	q.Set("source_url", sourceURL)
 	q.Set("data", string(raw))
@@ -97,7 +140,7 @@ func FetchSearchResource(ctx context.Context, client *http.Client, cookiesHeader
 	return body, nextBookmark, resp.StatusCode, nil
 }
 
-func FetchSearchPage(ctx context.Context, client *http.Client, cookiesHeader string, headersJSON string, userAgent string, query string, rs string) ([]byte, int, error) {
+func FetchSearchPage(ctx context.Context, client *http.Client, cookiesHeader string, headersJSON string, userAgent string, query string, rs string, filter string) ([]byte, int, error) {
 	if client == nil {
 		return nil, 0, errors.New("http client is nil")
 	}
@@ -105,7 +148,7 @@ func FetchSearchPage(ctx context.Context, client *http.Client, cookiesHeader str
 		return nil, 0, errors.New("missing search query")
 	}
 
-	sourceURL := BuildSearchSourceURL(query, rs)
+	sourceURL := BuildSearchSourceURL(query, rs, filter)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, HomefeedBaseURL+sourceURL, nil)
 	if err != nil {
 		return nil, 0, err
@@ -138,18 +181,6 @@ func FetchSearchPage(ctx context.Context, client *http.Client, cookiesHeader str
 	}
 
 	return body, resp.StatusCode, nil
-}
-
-func ExtractSearchPinsJSON(html string) ([]byte, error) {
-	pins, err := parsers.ExtractSearchPinsFromHTML(html)
-	if err != nil {
-		return nil, err
-	}
-
-	return json.Marshal(map[string]any{
-		"pins":  pins,
-		"count": len(pins),
-	})
 }
 
 func ParseSearchBookmark(body []byte) (string, error) {

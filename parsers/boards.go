@@ -90,6 +90,20 @@ func ExtractBoardsFromJSON(raw string) ([]BoardMetadata, error) {
 	return collector.boards, nil
 }
 
+func ExtractBoardsFromHTML(html string) ([]BoardMetadata, error) {
+	collector := &boardCollector{
+		seen:   make(map[string]struct{}),
+		boards: make([]BoardMetadata, 0),
+	}
+	for _, script := range extractApplicationJSONScripts(html) {
+		_ = collector.collectJSON(script)
+	}
+	if len(collector.boards) == 0 {
+		return nil, errors.New("no boards found in html")
+	}
+	return collector.boards, nil
+}
+
 type boardCollector struct {
 	boards []BoardMetadata
 	seen   map[string]struct{}
