@@ -22,7 +22,7 @@ PINTEREST_PASSWORD=your_password
 
 Notes:
 - `POST /api/login` needs `DATABASE_URL`
-- `GET /api/homefeed`, `GET /api/search`, `GET /api/board`, and `GET /api/react` use the full authenticated setup above
+- `GET /api/homefeed`, `GET /api/search`, `GET /api/board`, `GET /api/react`, and `GET /api/follow` use the full authenticated setup above
 - `PINTEREST_AUTH_CONFIRMED` is auto-enabled when running via `go run .`
 - if `PINTEREST_EMAIL` and `PINTEREST_PASSWORD` are set, authenticated endpoints can auto-refresh the stored session without manually calling `/api/login`
 
@@ -56,6 +56,7 @@ GET /api/search
 GET /api/board
 GET /api/user
 GET /api/react
+GET /api/follow
 ```
 
 # Usage
@@ -125,7 +126,7 @@ Example:
 Fetch user profile metadata (follower count, bio, etc.) and a list of their public boards.
 
 Example:
-  curl "http://localhost:8080/api/user?url=https://www.pinterest.com/686udjie/" | jq
+  curl "http://localhost:8080/api/user?url=https://www.pinterest.com/thelobotomydidntwork/" | jq
 ```
 
 ## `GET /api/react`
@@ -136,6 +137,15 @@ Examples:
   curl "http://localhost:8080/api/react?like&url=https://www.pinterest.com/pin/752241944045890914/" | jq
   curl "http://localhost:8080/api/react?unlike&id=752241944045890914" | jq
   curl "http://localhost:8080/api/react?check&id=752241944045890914" | jq
+```
+
+## `GET /api/follow`
+```sh
+Follow or unfollow a Pinterest user. Supports both user ID and profile URL.
+
+Examples:
+  curl "http://localhost:8080/api/follow?follow&url=https://www.pinterest.com/thelobotomydidntwork/" | jq
+  curl "http://localhost:8080/api/follow?unfollow&id=1135822105930274347" | jq
 ```
 
 # Session Setup

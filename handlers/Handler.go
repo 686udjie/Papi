@@ -452,6 +452,89 @@ func parseReactActionFromQuery(r *http.Request) (string, error) {
 	return "", errors.New("must specify either like, unlike, or check")
 }
 
+func (a *App) Follow(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{
+			"error": "method not allowed",
+		})
+		return
+	}
+
+	action, err := parseFollowActionFromQuery(r)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	userID := strings.TrimSpace(r.URL.Query().Get("id"))
+	if userID == "" {
+		profileURL := strings.TrimSpace(r.URL.Query().Get("url"))
+		if profileURL == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing id or url"})
+			return
+		}
+
+		// If only URL is provided, we need to fetch the ID first
+		client := a.httpClient()
+		session, _ := a.Store.GetSession(r.Context(), storage.DefaultSessionID)
+		var cookiesHeader string
+		if session != nil {
+			cookiesHeader = session.CookiesHeader
+		}
+
+		username := parsers.ExtractUsername(profileURL)
+		if username == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid profile url"})
+			return
+		}
+
+		meta, err := services.FetchUserMetadata(r.Context(), client, cookiesHeader, username, "/")
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "failed to resolve user id: " + err.Error()})
+			return
+		}
+		userID = meta.ID
+	}
+
+	session, err := a.requireSession(w, r)
+	if err != nil {
+		return
+	}
+
+	var result *services.FollowResponse
+	switch action {
+	case "follow":
+		result, err = services.FollowUser(r.Context(), a.httpClient(), session.CookiesHeader, session.HeadersJSON, session.UserAgent, userID)
+	case "unfollow":
+		result, err = services.UnfollowUser(r.Context(), a.httpClient(), session.CookiesHeader, session.HeadersJSON, session.UserAgent, userID)
+	default:
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid action"})
+		return
+	}
+
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
+func parseFollowActionFromQuery(r *http.Request) (string, error) {
+	follow := r.URL.Query().Has("follow")
+	unfollow := r.URL.Query().Has("unfollow")
+	if follow && unfollow {
+		return "", errors.New("cannot specify both follow and unfollow")
+	}
+	if follow {
+		return "follow", nil
+	}
+	if unfollow {
+		return "unfollow", nil
+	}
+	return "", errors.New("must specify either follow or unfollow")
+}
+
 
 
 func parseSearchRequest(w http.ResponseWriter, r *http.Request) (string, string, string, bool) {
