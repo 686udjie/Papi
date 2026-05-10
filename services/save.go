@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -35,6 +36,7 @@ type pinMetadata struct {
 	Title   string
 	CTP     string
 	RepinID string
+	IsRepin bool
 }
 
 // SavePin saves a pin to the user's profile (Quick Save).
@@ -143,6 +145,33 @@ func UnsavePin(ctx context.Context, client *http.Client, cookiesHeader, headersJ
 	return &SaveResponse{
 		Status: "unsaved",
 		PinID:  id,
+		SaveID: saveID,
+	}, nil
+}
+
+// CheckPinStatus returns the save_id/repin_id if the pin is currently saved by the user.
+func CheckPinStatus(ctx context.Context, client *http.Client, cookiesHeader, headersJSON, userAgent, pinID string) (*SaveResponse, error) {
+	if pinID == "" {
+		return nil, ErrMissingPinID
+	}
+
+	meta, err := fetchPinMetadata(ctx, client, cookiesHeader, headersJSON, userAgent, pinID)
+	if err != nil {
+		return nil, err
+	}
+
+	status := "not_saved"
+	saveID := meta.RepinID
+	if meta.RepinID != "" {
+		status = "saved"
+	} else if meta.IsRepin {
+		status = "saved"
+		saveID = pinID
+	}
+
+	return &SaveResponse{
+		Status: status,
+		PinID:  pinID,
 		SaveID: saveID,
 	}, nil
 }
@@ -257,14 +286,23 @@ func fetchPinMetadata(ctx context.Context, client *http.Client, cookiesHeader, h
 		}
 	}
 	
-	// Extract RepinID (repin_id / native_pin_id)
-	if strings.Contains(html, "\"repin_id\":\"") {
-		parts := strings.Split(html, "\"repin_id\":\"")
-		meta.RepinID = strings.Split(parts[1], "\"")[0]
-	} else if strings.Contains(html, "\"native_pin_id\":\"") {
-		parts := strings.Split(html, "\"native_pin_id\":\"")
-		meta.RepinID = strings.Split(parts[1], "\"")[0]
-	}
+	// 3. Extract RepinID (repin_id / native_pin_id)
+	// We look for explicit repin fields. This is the most reliable way to find the save_id.
+	re := regexp.MustCompile(`"(?:repin_id|native_pin_id)":\s*"?(\d{15,})"?`)
+	matches := re.FindAllStringSubmatch(html, -1)
 	
+	for _, m := range matches {
+		foundID := m[1]
+		if foundID != pinID {
+			meta.RepinID = foundID
+			return meta, nil
+		}
+	}
+
+	// 4. Detect if this pin is itself a repin
+	if strings.Contains(html, "\"is_repin\":true") || strings.Contains(html, "\"is_repin\": true") {
+		meta.IsRepin = true
+	}
+
 	return meta, nil
 }

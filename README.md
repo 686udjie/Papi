@@ -156,6 +156,11 @@ Save a pin to your profile (Quick Save) or unsave it.
 Examples:
   # returns a pin_id/save_id
   curl "http://localhost:8080/api/save?save&id=1050816525557943711" | jq
+  
+  # check if a pin is saved and get its save_id
+  curl "http://localhost:8080/api/save?check&id=1010565603877732292" | jq
+
+  # unsave using a save_id
   curl "http://localhost:8080/api/save?unsave&id=REPLACE_WITH_SAVE_ID" | jq
 ```
 

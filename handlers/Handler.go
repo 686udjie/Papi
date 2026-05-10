@@ -495,6 +495,8 @@ func (a *App) Save(w http.ResponseWriter, r *http.Request) {
 	case "unsave":
 		// Note: for unsave, id should be the repin_id (save_id)
 		result, err = services.UnsavePin(r.Context(), a.httpClient(), session.CookiesHeader, session.HeadersJSON, session.UserAgent, id)
+	case "check":
+		result, err = services.CheckPinStatus(r.Context(), a.httpClient(), session.CookiesHeader, session.HeadersJSON, session.UserAgent, id)
 	default:
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid action"})
 		return
@@ -520,7 +522,11 @@ func parseSaveActionFromQuery(r *http.Request) (string, error) {
 	if unsave {
 		return "unsave", nil
 	}
-	return "", errors.New("must specify either save or unsave")
+	check := r.URL.Query().Has("check")
+	if check {
+		return "check", nil
+	}
+	return "", errors.New("must specify either save, unsave, or check")
 }
 
 func (a *App) Follow(w http.ResponseWriter, r *http.Request) {
