@@ -37,6 +37,7 @@ func registerRoutes(app *handlers.App) {
 	http.HandleFunc("/api/user", app.User)
 	http.HandleFunc("/api/react", app.React)
 	http.HandleFunc("/api/follow", app.Follow)
+	http.HandleFunc("/api/save", app.Save)
 }
 
 func runServer() {

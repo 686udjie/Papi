@@ -452,6 +452,77 @@ func parseReactActionFromQuery(r *http.Request) (string, error) {
 	return "", errors.New("must specify either like, unlike, or check")
 }
 
+func (a *App) Save(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{
+			"error": "method not allowed",
+		})
+		return
+	}
+
+	action, err := parseSaveActionFromQuery(r)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	id := strings.TrimSpace(r.URL.Query().Get("id"))
+	if id == "" {
+		rawURL := strings.TrimSpace(r.URL.Query().Get("url"))
+		if rawURL == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing id or url"})
+			return
+		}
+		id = services.ExtractPinIDFromURL(rawURL)
+		if id == "" {
+			id = services.ExtractPinID(rawURL)
+		}
+	}
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid id or url"})
+		return
+	}
+
+	session, err := a.requireSession(w, r)
+	if err != nil {
+		return
+	}
+
+	var result *services.SaveResponse
+	switch action {
+	case "save":
+		result, err = services.SavePin(r.Context(), a.httpClient(), session.CookiesHeader, session.HeadersJSON, session.UserAgent, id)
+	case "unsave":
+		// Note: for unsave, id should be the repin_id (save_id)
+		result, err = services.UnsavePin(r.Context(), a.httpClient(), session.CookiesHeader, session.HeadersJSON, session.UserAgent, id)
+	default:
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid action"})
+		return
+	}
+
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
+func parseSaveActionFromQuery(r *http.Request) (string, error) {
+	save := r.URL.Query().Has("save")
+	unsave := r.URL.Query().Has("unsave")
+	if save && unsave {
+		return "", errors.New("cannot specify both save and unsave")
+	}
+	if save {
+		return "save", nil
+	}
+	if unsave {
+		return "unsave", nil
+	}
+	return "", errors.New("must specify either save or unsave")
+}
+
 func (a *App) Follow(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{

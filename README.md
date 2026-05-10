@@ -22,7 +22,7 @@ PINTEREST_PASSWORD=your_password
 
 Notes:
 - `POST /api/login` needs `DATABASE_URL`
-- `GET /api/homefeed`, `GET /api/search`, `GET /api/board`, `GET /api/react`, and `GET /api/follow` use the full authenticated setup above
+- `GET /api/homefeed`, `GET /api/search`, `GET /api/board`, `GET /api/react`, `GET /api/follow`, and `GET /api/save` use the full authenticated setup above
 - `PINTEREST_AUTH_CONFIRMED` is auto-enabled when running via `go run .`
 - if `PINTEREST_EMAIL` and `PINTEREST_PASSWORD` are set, authenticated endpoints can auto-refresh the stored session without manually calling `/api/login`
 
@@ -57,6 +57,7 @@ GET /api/board
 GET /api/user
 GET /api/react
 GET /api/follow
+GET /api/save
 ```
 
 # Usage
@@ -146,6 +147,16 @@ Follow or unfollow a Pinterest user. Supports both user ID and profile URL.
 Examples:
   curl "http://localhost:8080/api/follow?follow&url=https://www.pinterest.com/thelobotomydidntwork/" | jq
   curl "http://localhost:8080/api/follow?unfollow&id=1135822105930274347" | jq
+```
+
+## `GET /api/save`
+```sh
+Save a pin to your profile (Quick Save) or unsave it.
+
+Examples:
+  # returns a pin_id/save_id
+  curl "http://localhost:8080/api/save?save&id=1050816525557943711" | jq
+  curl "http://localhost:8080/api/save?unsave&id=REPLACE_WITH_SAVE_ID" | jq
 ```
 
 # Session Setup
