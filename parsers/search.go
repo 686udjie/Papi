@@ -3,6 +3,7 @@ package parsers
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 )
 
 var ErrSearchPinsNotFound = errors.New("search pins not found")
@@ -92,6 +93,125 @@ func (c *searchPinCollector) add(pin map[string]any) {
 	}
 	c.seen[id] = struct{}{}
 	c.pins = append(c.pins, pin)
+}
+
+func isPromotedPin(pin map[string]any) bool {
+	// Direct promotion flags
+	if checkBoolField(pin, "is_promoted") ||
+	   checkBoolField(pin, "is_downstream_promotion") ||
+	   checkBoolField(pin, "promoted_is_lead_ad") ||
+	   checkBoolField(pin, "promoted_is_removable") ||
+	   checkBoolField(pin, "is_ads_only_profile") {
+		return true
+	}
+	
+	// Object fields indicating promotion
+	if hasObjectField(pin, "promoted_pin") ||
+	   hasObjectField(pin, "sponsor") ||
+	   hasObjectField(pin, "advertiser") {
+		return true
+	}
+	
+	// String fields indicating promotion
+	if checkNonEmptyStringField(pin, "promoted_type") {
+		return true
+	}
+	
+	// Numeric fields indicating ads
+	if adMatchReason, ok := getInt(pin["ad_match_reason"]); ok && adMatchReason > 0 {
+		return true
+	}
+	
+	// Commercial content indicators
+	if hasArrayField(pin, "shopping_flags") ||
+	   hasProductMetadata(pin) {
+		return true
+	}
+	
+	// Link-based promotion indicators
+	if hasAffiliateLinks(pin) || hasPromotionalTracking(pin) {
+		return true
+	}
+	
+	return false
+}
+
+func checkBoolField(pin map[string]any, field string) bool {
+	if val, ok := getBool(pin[field]); ok {
+		return val
+	}
+	return false
+}
+
+func hasObjectField(pin map[string]any, field string) bool {
+	_, ok := getMap(pin[field])
+	return ok
+}
+
+func checkNonEmptyStringField(pin map[string]any, field string) bool {
+	if val, ok := getString(pin[field]); ok {
+		return val != ""
+	}
+	return false
+}
+
+func hasArrayField(pin map[string]any, field string) bool {
+	if val, ok := pin[field].([]any); ok {
+		return len(val) > 0
+	}
+	return false
+}
+
+func hasProductMetadata(pin map[string]any) bool {
+	if richSummary, ok := getMap(pin["rich_summary"]); ok {
+		if products, ok := richSummary["products"].([]any); ok {
+			return len(products) > 0
+		}
+	}
+	return false
+}
+
+func hasAffiliateLinks(pin map[string]any) bool {
+	if utmLink, ok := getString(pin["utm_link"]); ok && utmLink != "" {
+		utmLink = strings.ToLower(utmLink)
+		return strings.Contains(utmLink, "skimresources") ||
+			   strings.Contains(utmLink, "affiliate") ||
+			   strings.Contains(utmLink, "referral")
+	}
+	return false
+}
+
+func hasPromotionalTracking(pin map[string]any) bool {
+	if trackingParams, ok := getString(pin["tracking_params"]); ok {
+		trackingParams = strings.ToLower(trackingParams)
+		return strings.Contains(trackingParams, "promoted") ||
+			   strings.Contains(trackingParams, "sponsor") ||
+			   strings.Contains(trackingParams, "advertiser")
+	}
+	return false
+}
+
+func FilterHomefeedPins(data map[string]any) {
+	// Navigate to the pins array in homefeed response
+	if resourceResponse, ok := data["resource_response"].(map[string]any); ok {
+		if responseData, ok := resourceResponse["data"].(map[string]any); ok {
+			if results, ok := responseData["results"].([]any); ok {
+				// Filter out promoted pins from results
+				filteredResults := make([]any, 0, len(results))
+				for _, item := range results {
+					if pin, ok := item.(map[string]any); ok {
+						if !isPromotedPin(pin) {
+							filteredResults = append(filteredResults, pin)
+						}
+					} else {
+						// Keep non-pin items as is
+						filteredResults = append(filteredResults, item)
+					}
+				}
+				responseData["results"] = filteredResults
+			}
+		}
+	}
 }
 
 func isPinObject(obj map[string]any) bool {

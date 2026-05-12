@@ -162,6 +162,15 @@ func (a *App) Homefeed(w http.ResponseWriter, r *http.Request) {
 		_ = a.Store.UpdateBookmark(r.Context(), storage.DefaultSessionID, nextBookmark)
 	}
 
+	// Filter out sponsored/promoted content from homefeed
+	var homefeedData map[string]any
+	if err := json.Unmarshal(body, &homefeedData); err == nil {
+		parsers.FilterHomefeedPins(homefeedData)
+		if filteredBody, err := json.Marshal(homefeedData); err == nil {
+			body = filteredBody
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(body)

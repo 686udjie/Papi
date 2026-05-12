@@ -57,6 +57,16 @@ func getInt(v any) (int, bool) {
 	return int(f), true
 }
 
+func getBool(v any) (bool, bool) {
+	b, ok := v.(bool)
+	return b, ok
+}
+
+func getInt(v any) (int, bool) {
+	i, ok := v.(int)
+	return i, ok
+}
+
 func extractMetaContent(html string, property string) (string, bool) {
 	key := regexp.QuoteMeta(property)
 	re1 := regexp.MustCompile(`(?i)<meta[^>]+(?:property|name)=["']` + key + `["'][^>]+content=["']([^"']+)["']`)
