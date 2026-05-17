@@ -621,6 +621,105 @@ func parseFollowActionFromQuery(r *http.Request) (string, error) {
 	return "", errors.New("must specify either follow or unfollow")
 }
 
+func (a *App) Followers(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{
+			"error": "method not allowed",
+		})
+		return
+	}
+
+	username := strings.TrimSpace(r.URL.Query().Get("username"))
+	if username == "" {
+		profileURL := strings.TrimSpace(r.URL.Query().Get("url"))
+		if profileURL == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing username or url"})
+			return
+		}
+		username = parsers.ExtractUsername(profileURL)
+	}
+	if username == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid username or url"})
+		return
+	}
+
+	client := a.httpClient()
+	var cookiesHeader string
+	var headersJSON string
+	var userAgent string
+
+	if a.Store != nil {
+		session, _ := a.Store.GetSession(r.Context(), storage.DefaultSessionID)
+		if session != nil {
+			cookiesHeader = session.CookiesHeader
+			headersJSON = session.HeadersJSON
+			userAgent = session.UserAgent
+		}
+	}
+
+	users, err := services.FetchFollowers(r.Context(), client, cookiesHeader, headersJSON, userAgent, username)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"count":    len(users),
+		"username": username,
+		"users":    users,
+	})
+}
+
+func (a *App) Following(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{
+			"error": "method not allowed",
+		})
+		return
+	}
+
+	username := strings.TrimSpace(r.URL.Query().Get("username"))
+	if username == "" {
+		profileURL := strings.TrimSpace(r.URL.Query().Get("url"))
+		if profileURL == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing username or url"})
+			return
+		}
+		username = parsers.ExtractUsername(profileURL)
+	}
+	if username == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid username or url"})
+		return
+	}
+
+	client := a.httpClient()
+	var cookiesHeader string
+	var headersJSON string
+	var userAgent string
+
+	if a.Store != nil {
+		session, _ := a.Store.GetSession(r.Context(), storage.DefaultSessionID)
+		if session != nil {
+			cookiesHeader = session.CookiesHeader
+			headersJSON = session.HeadersJSON
+			userAgent = session.UserAgent
+		}
+	}
+
+	users, err := services.FetchFollowing(r.Context(), client, cookiesHeader, headersJSON, userAgent, username)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"count":    len(users),
+		"username": username,
+		"users":    users,
+	})
+}
+
+
 
 
 func parseSearchRequest(w http.ResponseWriter, r *http.Request) (string, string, string, bool) {

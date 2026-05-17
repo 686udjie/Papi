@@ -58,6 +58,8 @@ GET /api/user
 GET /api/react
 GET /api/follow
 GET /api/save
+GET /api/followers
+GET /api/following
 ```
 
 # Usage
@@ -162,6 +164,24 @@ Examples:
 
   # unsave using a save_id
   curl "http://localhost:8080/api/save?unsave&id=REPLACE_WITH_SAVE_ID" | jq
+```
+
+## `GET /api/followers`
+```sh
+Fetch followers of a Pinterest user. Supports both username and profile URL.
+
+Examples:
+  curl "http://localhost:8080/api/followers?username=Skatbad07" | jq
+  curl "http://localhost:8080/api/followers?url=https://www.pinterest.com/Skatbad07/" | jq
+```
+
+## `GET /api/following`
+```sh
+Fetch the users followed by a Pinterest user. Supports both username and profile URL.
+
+Examples:
+  curl "http://localhost:8080/api/following?username=Skatbad07" | jq
+  curl "http://localhost:8080/api/following?url=https://www.pinterest.com/Skatbad07/" | jq
 ```
 
 # Session Setup
