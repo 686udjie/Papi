@@ -56,13 +56,17 @@ func (a *App) User(w http.ResponseWriter, r *http.Request) {
 
 	// Optional session for better data (counts, etc)
 	var cookiesHeader string
+	var headersJSON string
+	var userAgent string
 	client := a.httpClient()
 	session, _ := a.Store.GetSession(r.Context(), storage.DefaultSessionID)
 	if session != nil && !storage.SessionExpired(session) {
 		cookiesHeader = session.CookiesHeader
+		headersJSON = session.HeadersJSON
+		userAgent = session.UserAgent
 	}
 
-	result, err := services.FetchUser(r.Context(), client, cookiesHeader, profileURL)
+	result, err := services.FetchUser(r.Context(), client, cookiesHeader, headersJSON, userAgent, profileURL)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
@@ -248,6 +252,7 @@ func (a *App) Search(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 			return
 		}
+		boards = services.ResolveBoardThumbnailsConcurrently(r.Context(), a.httpClient(), session.CookiesHeader, session.HeadersJSON, session.UserAgent, boards)
 		finalResults = boards
 		resultCount = len(boards)
 

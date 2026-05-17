@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 
 	"papi/parsers"
 )
@@ -269,4 +270,105 @@ func FetchBoardFeedPins(ctx context.Context, client *http.Client, cookiesHeader,
 
 	body, _ := io.ReadAll(resp.Body)
 	return body, resp.StatusCode, nil
+}
+
+// ResolveBoardThumbnailsConcurrently concurrent resolver that populates cover_urls for boards lacking them.
+func ResolveBoardThumbnailsConcurrently(ctx context.Context, client *http.Client, cookiesHeader, headersJSON, userAgent string, boards []parsers.BoardMetadata) []parsers.BoardMetadata {
+	if len(boards) == 0 {
+		return boards
+	}
+
+	type result struct {
+		index int
+		urls  []string
+	}
+
+	ch := make(chan result, len(boards))
+	sem := make(chan struct{}, 8) // Limit to 8 concurrent requests
+	var wg sync.WaitGroup
+
+	for i, b := range boards {
+		// If the board already has at least 3 cover URLs, we don't need to fetch
+		if len(b.CoverURLs) >= 3 {
+			continue
+		}
+
+		wg.Add(1)
+		go func(index int, board parsers.BoardMetadata) {
+			defer wg.Done()
+
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
+			defer func() { <-sem }()
+
+			if ctx.Err() != nil {
+				return
+			}
+
+			sourcePath := board.URL
+			if strings.HasPrefix(sourcePath, "http://") || strings.HasPrefix(sourcePath, "https://") {
+				if u, err := url.Parse(sourcePath); err == nil {
+					sourcePath = u.Path
+				}
+			}
+
+			// We will collect up to 3 cover URLs.
+			// Start with the existing board cover URLs if present (the big board cover image)
+			var coverURLs []string
+			for _, u := range board.CoverURLs {
+				if u != "" {
+					coverURLs = append(coverURLs, u)
+				}
+			}
+
+			body, s, err := FetchBoardFeedPins(ctx, client, cookiesHeader, headersJSON, userAgent, sourcePath, board.ID)
+			if err == nil && s == 200 {
+				if pins, err := parsers.ExtractSearchPinsFromJSON(string(body)); err == nil {
+					for _, pin := range pins {
+						if imgURL := parsers.ExtractPinImageURL(pin); imgURL != "" {
+							// Ensure we don't duplicate the main cover image
+							isDup := false
+							for _, existing := range coverURLs {
+								if existing == imgURL {
+									isDup = true
+									break
+								}
+							}
+							if !isDup {
+								coverURLs = append(coverURLs, imgURL)
+								if len(coverURLs) == 3 {
+									break
+								}
+							}
+						}
+					}
+				}
+			}
+
+			if len(coverURLs) > 0 {
+				ch <- result{index: index, urls: coverURLs}
+			} else {
+				ch <- result{index: index, urls: nil}
+			}
+		}(i, b)
+	}
+
+	go func() {
+		wg.Wait()
+		close(ch)
+	}()
+
+	resolved := make([]parsers.BoardMetadata, len(boards))
+	copy(resolved, boards)
+
+	for res := range ch {
+		if len(res.urls) > 0 {
+			resolved[res.index].CoverURLs = res.urls
+		}
+	}
+
+	return resolved
 }

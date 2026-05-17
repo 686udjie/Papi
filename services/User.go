@@ -13,7 +13,7 @@ type UserResponse struct {
 }
 
 // FetchUser orchestrates fetching both user metadata and their collection of boards.
-func FetchUser(ctx context.Context, client *http.Client, cookiesHeader, profileURL string) (*UserResponse, error) {
+func FetchUser(ctx context.Context, client *http.Client, cookiesHeader, headersJSON, userAgent, profileURL string) (*UserResponse, error) {
 	username := parsers.ExtractUsername(profileURL)
 	if username == "" {
 		return nil, errors.New("invalid profile url")
@@ -29,6 +29,8 @@ func FetchUser(ctx context.Context, client *http.Client, cookiesHeader, profileU
 	boards, err := FetchUserBoards(ctx, client, cookiesHeader, metadata.Username, sourcePath)
 	if err != nil {
 		boards = []parsers.BoardMetadata{}
+	} else {
+		boards = ResolveBoardThumbnailsConcurrently(ctx, client, cookiesHeader, headersJSON, userAgent, boards)
 	}
 
 	return &UserResponse{

@@ -15,13 +15,14 @@ type BoardSection struct {
 }
  
 type BoardMetadata struct {
-	ID           string `json:"id"`
-	Name         string `json:"name"`
-	URL          string `json:"url"`
-	Username     string `json:"username"`
-	Slug         string `json:"slug"`
-	SectionCount int    `json:"section_count"`
-	PinCount     int    `json:"pin_count"`
+	ID           string   `json:"id"`
+	Name         string   `json:"name"`
+	URL          string   `json:"url"`
+	Username     string   `json:"username"`
+	Slug         string   `json:"slug"`
+	SectionCount int      `json:"section_count"`
+	PinCount     int      `json:"pin_count"`
+	CoverURLs    []string `json:"cover_urls"`
 }
 
 func ExtractBoardMetadataFromHTML(html string) (*BoardMetadata, error) {
@@ -164,13 +165,125 @@ func parseBoardMetadata(obj map[string]any) (BoardMetadata, bool) {
 	sectionCount, _ := getInt(obj["section_count"])
 	pinCount, _ := getInt(obj["pin_count"])
 
+	owner, _ := getMap(obj["owner"])
+	username, _ := getString(owner["username"])
+	if username == "" {
+		username, _ = getString(obj["username"])
+	}
+
+	slug := ""
+	trimmed := strings.Trim(url, "/")
+	parts := strings.Split(trimmed, "/")
+	if len(parts) >= 2 {
+		if username == "" {
+			username = parts[0]
+		}
+		slug = parts[1]
+	}
+
+	coverURLs := extractCoverURLs(obj)
+
 	return BoardMetadata{
 		ID:           id,
 		Name:         name,
 		URL:          url,
+		Username:     username,
+		Slug:         slug,
 		SectionCount: sectionCount,
 		PinCount:     pinCount,
+		CoverURLs:    coverURLs,
 	}, true
+}
+
+func extractCoverURLs(obj map[string]any) []string {
+	// A. Find the main cover image
+	var mainCover string
+
+	if s, ok := getString(obj["image_cover_url"]); ok {
+		mainCover = s
+	}
+	if mainCover == "" {
+		if media, ok := getMap(obj["media"]); ok {
+			if s, ok := getString(media["image_cover_url"]); ok {
+				mainCover = s
+			}
+		}
+	}
+	if mainCover == "" {
+		if val, ok := obj["cover_images"]; ok {
+			if arr, ok := val.([]any); ok && len(arr) > 0 {
+				if m, ok := getMap(arr[0]); ok {
+					if s, ok := getString(m["url"]); ok {
+						mainCover = s
+					}
+				} else if s, ok := arr[0].(string); ok {
+					mainCover = s
+				}
+			}
+		}
+	}
+
+	// B. Find the preview pin thumbnails
+	var previewURLs []string
+	var rawPreviews []any
+	if val, ok := obj["pin_thumbnail_urls"]; ok {
+		if arr, ok := val.([]any); ok {
+			rawPreviews = arr
+		}
+	}
+	if len(rawPreviews) == 0 {
+		if media, ok := getMap(obj["media"]); ok {
+			if val, ok := media["pin_thumbnail_urls"]; ok {
+				if arr, ok := val.([]any); ok {
+					rawPreviews = arr
+				}
+			}
+		}
+	}
+	for _, item := range rawPreviews {
+		if s, ok := item.(string); ok && s != "" {
+			previewURLs = append(previewURLs, s)
+		}
+	}
+
+	// C. Assemble the final list: mainCover first, followed by previews
+	var urls []string
+	if mainCover != "" {
+		urls = append(urls, mainCover)
+	}
+
+	for _, u := range previewURLs {
+		urls = append(urls, u)
+	}
+
+	seen := make(map[string]bool)
+	var finalUrls []string
+	for _, u := range urls {
+		u = strings.TrimSpace(u)
+		if u != "" && !seen[u] {
+			seen[u] = true
+			finalUrls = append(finalUrls, u)
+		}
+	}
+
+	return finalUrls
+}
+
+// ExtractPinImageURL extracts the cleanest image URL from an individual Pin map.
+func ExtractPinImageURL(pin map[string]any) string {
+	images, ok := getMap(pin["images"])
+	if !ok {
+		return ""
+	}
+	// Try multiple resolutions
+	for _, size := range []string{"orig", "736x", "564x", "474x", "236x", "170x"} {
+		if img, ok := getMap(images[size]); ok {
+			if url, ok := getString(img["url"]); ok && url != "" {
+				return url
+			}
+		}
+	}
+	return ""
 }
 
 type boardSectionCollector struct {
