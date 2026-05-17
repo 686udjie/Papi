@@ -50,6 +50,9 @@ func getFloat64(v any) (float64, bool) {
 }
 
 func getInt(v any) (int, bool) {
+	if i, ok := v.(int); ok {
+		return i, true
+	}
 	f, ok := getFloat64(v)
 	if !ok {
 		return 0, false
@@ -62,10 +65,6 @@ func getBool(v any) (bool, bool) {
 	return b, ok
 }
 
-func getInt(v any) (int, bool) {
-	i, ok := v.(int)
-	return i, ok
-}
 
 func extractMetaContent(html string, property string) (string, bool) {
 	key := regexp.QuoteMeta(property)
